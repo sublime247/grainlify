@@ -539,6 +539,40 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
               <SkeletonLoader className="h-4 w-full" />
               <SkeletonLoader className="h-4 w-3/4" />
             </div>
+          ) : project?.readme ? (
+            <div className={`prose prose-sm max-w-none ${
+              theme === 'dark' 
+                ? 'prose-invert prose-headings:text-[#f5f5f5] prose-p:text-[#d4d4d4] prose-a:text-[#c9983a] prose-strong:text-[#f5f5f5] prose-code:text-[#c9983a] prose-code:bg-white/[0.1] prose-pre:bg-white/[0.1]' 
+                : 'prose-headings:text-[#2d2820] prose-p:text-[#4a3f2f] prose-a:text-[#c9983a] prose-strong:text-[#2d2820] prose-code:text-[#c9983a] prose-code:bg-white/[0.15] prose-pre:bg-white/[0.15]'
+            }`}>
+              <ReactMarkdown
+                components={{
+                  h1: ({node, ...props}: any) => <h1 className="text-[24px] font-bold mb-4 mt-6 first:mt-0" {...props} />,
+                  h2: ({node, ...props}: any) => <h2 className="text-[20px] font-bold mb-3 mt-5" {...props} />,
+                  h3: ({node, ...props}: any) => <h3 className="text-[18px] font-semibold mb-2 mt-4" {...props} />,
+                  p: ({node, ...props}: any) => <p className="mb-4 leading-relaxed" {...props} />,
+                  a: ({node, ...props}: any) => <a className="text-[#c9983a] hover:underline" target="_blank" rel="noopener noreferrer" {...props} />,
+                  code: ({node, inline, ...props}: any) => 
+                    inline ? (
+                      <code className="px-1.5 py-0.5 rounded text-[13px] font-mono bg-white/[0.15] text-[#c9983a]" {...props} />
+                    ) : (
+                      <code className="block p-4 rounded-[12px] text-[13px] font-mono bg-white/[0.1] overflow-x-auto" {...props} />
+                    ),
+                  pre: ({node, ...props}: any) => <pre className="mb-4 overflow-x-auto" {...props} />,
+                  ul: ({node, ...props}: any) => <ul className="list-disc list-inside mb-4 space-y-2" {...props} />,
+                  ol: ({node, ...props}: any) => <ol className="list-decimal list-inside mb-4 space-y-2" {...props} />,
+                  li: ({node, ...props}: any) => <li className="ml-4" {...props} />,
+                  blockquote: ({node, ...props}: any) => (
+                    <blockquote className="border-l-4 border-[#c9983a]/50 pl-4 italic my-4" {...props} />
+                  ),
+                  img: ({node, ...props}: any) => (
+                    <img className="rounded-[12px] max-w-full h-auto my-4" {...props} />
+                  ),
+                }}
+              >
+                {project.readme}
+              </ReactMarkdown>
+            </div>
           ) : (
             <p className={`text-[15px] leading-relaxed transition-colors ${
               theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#4a3f2f]'

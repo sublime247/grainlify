@@ -125,54 +125,46 @@ func (c *Client) GetReadme(ctx context.Context, accessToken string, fullName str
 	if err != nil {
 		return "", err
 	}
-	// Try common README filenames
-	readmeFiles := []string{"README.md", "readme.md", "README", "readme"}
-	
-	for _, readmeFile := range readmeFiles {
-		u := "https://api.github.com/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/readme"
-		// Try with the specific filename as a query parameter
-		if readmeFile != "README.md" {
-			u += "?ref=HEAD"
-		}
+	// GitHub API endpoint for README (automatically finds README.md, README, etc.)
+	u := "https://api.github.com/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/readme"
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-		if err != nil {
-			continue
-		}
-		if strings.TrimSpace(accessToken) != "" {
-			req.Header.Set("Authorization", "Bearer "+accessToken)
-		}
-		req.Header.Set("Accept", "application/vnd.github+json")
-		if c.UserAgent != "" {
-			req.Header.Set("User-Agent", c.UserAgent)
-		}
-
-		resp, err := c.HTTP.Do(req)
-		if err != nil {
-			continue
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode == 200 {
-			var readme ReadmeResponse
-			if err := json.NewDecoder(resp.Body).Decode(&readme); err != nil {
-				continue
-			}
-			
-			// Decode base64 content
-			if readme.Encoding == "base64" {
-				decoded, err := base64.StdEncoding.DecodeString(readme.Content)
-				if err != nil {
-					continue
-				}
-				return string(decoded), nil
-			}
-			// If not base64, return as-is (shouldn't happen with GitHub API)
-			return readme.Content, nil
-		}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
 	}
-	
-	return "", fmt.Errorf("readme not found")
+	if strings.TrimSpace(accessToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if c.UserAgent != "" {
+		req.Header.Set("User-Agent", c.UserAgent)
+	}
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("readme not found: status %d", resp.StatusCode)
+	}
+
+	var readme ReadmeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&readme); err != nil {
+		return "", err
+	}
+
+	// Decode base64 content
+	if readme.Encoding == "base64" {
+		decoded, err := base64.StdEncoding.DecodeString(readme.Content)
+		if err != nil {
+			return "", err
+		}
+		return string(decoded), nil
+	}
+	// If not base64, return as-is (shouldn't happen with GitHub API)
+	return readme.Content, nil
 }
 
 func splitFullName(fullName string) (string, string, error) {
