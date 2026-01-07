@@ -5,8 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -30,6 +32,69 @@ type Repo struct {
 		Push  bool `json:"push"`
 		Pull  bool `json:"pull"`
 	} `json:"permissions"`
+}
+
+type GitHubAPIError struct {
+	StatusCode        int
+	Message           string
+	DocumentationURL  string
+	RateLimitRemaining *int
+	RateLimitResetUnix *int64
+	Body              string
+}
+
+func (e *GitHubAPIError) Error() string {
+	msg := strings.TrimSpace(e.Message)
+	if msg == "" {
+		msg = "github api error"
+	}
+	if e.StatusCode != 0 {
+		msg = fmt.Sprintf("%s: status %d", msg, e.StatusCode)
+	}
+	if e.RateLimitRemaining != nil && e.RateLimitResetUnix != nil {
+		msg = fmt.Sprintf("%s (rate_limit_remaining=%d reset_unix=%d)", msg, *e.RateLimitRemaining, *e.RateLimitResetUnix)
+	}
+	return msg
+}
+
+func parseGitHubAPIError(resp *http.Response) error {
+	if resp == nil {
+		return fmt.Errorf("github api error: nil response")
+	}
+
+	// Best-effort parse body
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyStr := strings.TrimSpace(string(bodyBytes))
+
+	var payload struct {
+		Message          string `json:"message"`
+		DocumentationURL string `json:"documentation_url"`
+	}
+	if len(bodyBytes) > 0 {
+		_ = json.Unmarshal(bodyBytes, &payload)
+	}
+
+	var remaining *int
+	if v := strings.TrimSpace(resp.Header.Get("X-RateLimit-Remaining")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			remaining = &n
+		}
+	}
+	var reset *int64
+	if v := strings.TrimSpace(resp.Header.Get("X-RateLimit-Reset")); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			reset = &n
+		}
+	}
+
+	return &GitHubAPIError{
+		StatusCode:        resp.StatusCode,
+		Message:           payload.Message,
+		DocumentationURL:  payload.DocumentationURL,
+		RateLimitRemaining: remaining,
+		RateLimitResetUnix: reset,
+		Body:              bodyStr,
+	}
 }
 
 func (c *Client) GetRepo(ctx context.Context, accessToken string, fullName string) (Repo, error) {
@@ -59,7 +124,7 @@ func (c *Client) GetRepo(ctx context.Context, accessToken string, fullName strin
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Repo{}, fmt.Errorf("github repo fetch failed: status %d", resp.StatusCode)
+		return Repo{}, parseGitHubAPIError(resp)
 	}
 
 	var r Repo
@@ -98,7 +163,7 @@ func (c *Client) GetRepoLanguages(ctx context.Context, accessToken string, fullN
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("github repo languages fetch failed: status %d", resp.StatusCode)
+		return nil, parseGitHubAPIError(resp)
 	}
 
 	var langs map[string]int64

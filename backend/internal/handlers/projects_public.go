@@ -6,22 +6,83 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/jagadeesh/grainlify/backend/internal/config"
 	"github.com/jagadeesh/grainlify/backend/internal/db"
 	"github.com/jagadeesh/grainlify/backend/internal/github"
 )
 
 type ProjectsPublicHandler struct {
-	db *db.DB
+	db  *db.DB
+	cfg config.Config
+
+	// GitHub App enrichment helpers (best-effort).
+	appClient  *github.GitHubAppClient
+	tokenMu    sync.Mutex
+	tokenCache map[string]struct {
+		token     string
+		expiresAt time.Time
+	}
 }
 
-func NewProjectsPublicHandler(d *db.DB) *ProjectsPublicHandler {
-	return &ProjectsPublicHandler{db: d}
+func NewProjectsPublicHandler(cfg config.Config, d *db.DB) *ProjectsPublicHandler {
+	h := &ProjectsPublicHandler{
+		db:  d,
+		cfg: cfg,
+		tokenCache: map[string]struct {
+			token     string
+			expiresAt time.Time
+		}{},
+	}
+
+	// Initialize GitHub App client if configured.
+	if strings.TrimSpace(cfg.GitHubAppID) != "" && strings.TrimSpace(cfg.GitHubAppPrivateKey) != "" {
+		appClient, err := github.NewGitHubAppClient(cfg.GitHubAppID, cfg.GitHubAppPrivateKey)
+		if err != nil {
+			slog.Warn("failed to init github app client (will skip github enrichment auth)", "error", err)
+		} else {
+			h.appClient = appClient
+		}
+	}
+	return h
+}
+
+func (h *ProjectsPublicHandler) installationToken(ctx context.Context, installationID string) string {
+	if h.appClient == nil || strings.TrimSpace(installationID) == "" {
+		return ""
+	}
+
+	h.tokenMu.Lock()
+	defer h.tokenMu.Unlock()
+
+	if cached, ok := h.tokenCache[installationID]; ok && time.Now().Before(cached.expiresAt) {
+		return cached.token
+	}
+
+	// Installation tokens typically last 1 hour; refresh proactively.
+	tok, err := h.appClient.GetInstallationToken(ctx, installationID)
+	if err != nil {
+		slog.Warn("failed to get github app installation token (continuing without auth)",
+			"installation_id", installationID,
+			"error", err,
+		)
+		return ""
+	}
+
+	h.tokenCache[installationID] = struct {
+		token     string
+		expiresAt time.Time
+	}{
+		token:     tok,
+		expiresAt: time.Now().Add(50 * time.Minute),
+	}
+	return tok
 }
 
 // Get returns a single verified project by id, enriched with GitHub repo metadata and language breakdown.
@@ -52,6 +113,7 @@ func (h *ProjectsPublicHandler) Get() fiber.Handler {
 		// Load project from DB (verified + not deleted)
 		var id uuid.UUID
 		var fullName string
+		var installationID *string
 		var language, category *string
 		var tagsJSON []byte
 		var starsCount, forksCount *int
@@ -63,6 +125,7 @@ func (h *ProjectsPublicHandler) Get() fiber.Handler {
 SELECT 
   p.id,
   p.github_full_name,
+  p.github_app_installation_id,
   p.language,
   p.tags,
   p.category,
@@ -94,7 +157,7 @@ FROM projects p
 LEFT JOIN ecosystems e ON p.ecosystem_id = e.id
 WHERE p.id = $1 AND p.status = 'verified' AND p.deleted_at IS NULL
 `, projectID).Scan(
-			&id, &fullName, &language, &tagsJSON, &category, &starsCount, &forksCount,
+			&id, &fullName, &installationID, &language, &tagsJSON, &category, &starsCount, &forksCount,
 			&openIssuesCount, &openPRsCount, &contributorsCount,
 			&createdAt, &updatedAt, &ecosystemName, &ecosystemSlug,
 		)
@@ -121,14 +184,18 @@ WHERE p.id = $1 AND p.status = 'verified' AND p.deleted_at IS NULL
 			forks = *forksCount
 		}
 
-		// Enrich from GitHub (best effort, public/no-auth)
+		// Enrich from GitHub (best effort).
 		ctx, cancel := context.WithTimeout(c.Context(), 6*time.Second)
 		defer cancel()
 		gh := github.NewClient()
+		token := ""
+		if installationID != nil {
+			token = h.installationToken(ctx, *installationID)
+		}
 
 		var repo github.Repo
 		repoOK := false
-		r, repoErr := gh.GetRepo(ctx, "", fullName)
+		r, repoErr := gh.GetRepo(ctx, token, fullName)
 		if repoErr != nil {
 			// If GitHub fetch fails (404/403), it's likely a private repo
 			errStr := repoErr.Error()
@@ -168,7 +235,7 @@ WHERE id=$1
 
 		// GitHub language breakdown (best effort)
 		var langsOut []fiber.Map
-		if m, err := gh.GetRepoLanguages(ctx, "", fullName); err == nil && len(m) > 0 {
+		if m, err := gh.GetRepoLanguages(ctx, token, fullName); err == nil && len(m) > 0 {
 			var total int64
 			for _, v := range m {
 				total += v
@@ -186,7 +253,7 @@ WHERE id=$1
 
 		// Fetch README content (best effort)
 		var readmeContent string
-		if readme, err := gh.GetReadme(ctx, "", fullName); err == nil {
+		if readme, err := gh.GetReadme(ctx, token, fullName); err == nil {
 			readmeContent = readme
 		} else {
 			slog.Warn("failed to fetch README for project",
@@ -448,6 +515,7 @@ func (h *ProjectsPublicHandler) List() fiber.Handler {
 SELECT 
   p.id,
   p.github_full_name,
+  p.github_app_installation_id,
   p.language,
   p.tags,
   p.category,
@@ -498,6 +566,7 @@ LIMIT $%d OFFSET $%d
 		for rows.Next() {
 			var id uuid.UUID
 			var fullName string
+			var installationID *string
 			var language, category *string
 			var tagsJSON []byte
 			var starsCount, forksCount *int
@@ -505,7 +574,7 @@ LIMIT $%d OFFSET $%d
 			var createdAt, updatedAt time.Time
 			var ecosystemName, ecosystemSlug *string
 
-			if err := rows.Scan(&id, &fullName, &language, &tagsJSON, &category, &starsCount, &forksCount, &openIssuesCount, &openPRsCount, &contributorsCount, &createdAt, &updatedAt, &ecosystemName, &ecosystemSlug); err != nil {
+			if err := rows.Scan(&id, &fullName, &installationID, &language, &tagsJSON, &category, &starsCount, &forksCount, &openIssuesCount, &openPRsCount, &contributorsCount, &createdAt, &updatedAt, &ecosystemName, &ecosystemSlug); err != nil {
 				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "projects_list_failed", "details": err.Error()})
 			}
 
@@ -525,23 +594,20 @@ LIMIT $%d OFFSET $%d
 				forks = *forksCount
 			}
 
-			// Get repo description from GitHub (best effort)
-			// Skip private repos - we can't fetch their data without authentication
+			// Get repo description from GitHub (best effort).
+			// IMPORTANT: Do NOT drop projects if GitHub enrichment fails (rate limits, transient errors).
 			var description string
-			repo, repoErr := gh.GetRepo(ctx, "", fullName)
+			token := ""
+			if installationID != nil {
+				token = h.installationToken(ctx, *installationID)
+			}
+			repo, repoErr := gh.GetRepo(ctx, token, fullName)
 			if repoErr != nil {
-				// If GitHub fetch fails (404/403), it's likely a private repo
-				// Skip private repositories - we can't access their content without auth
-				errStr := repoErr.Error()
-				if strings.Contains(errStr, "404") || strings.Contains(errStr, "403") || strings.Contains(errStr, "Not Found") {
-					slog.Info("skipping private or inaccessible repository",
-						"project_id", id,
-						"github_full_name", fullName,
-						"error", repoErr,
-					)
-					continue // Skip this project
-				}
-				// For other errors, continue without description
+				slog.Warn("github repo enrichment failed (continuing without github metadata)",
+					"project_id", id,
+					"github_full_name", fullName,
+					"error", repoErr,
+				)
 			} else {
 				// Check if repo is private
 				if repo.Private {
@@ -632,6 +698,7 @@ func (h *ProjectsPublicHandler) Recommended() fiber.Handler {
 SELECT 
   p.id,
   p.github_full_name,
+  p.github_app_installation_id,
   p.language,
   p.tags,
   p.category,
@@ -680,6 +747,7 @@ LIMIT $1
 		for rows.Next() {
 			var id uuid.UUID
 			var fullName string
+			var installationID *string
 			var language, category *string
 			var tagsJSON []byte
 			var starsCount, forksCount *int
@@ -687,7 +755,7 @@ LIMIT $1
 			var createdAt, updatedAt time.Time
 			var ecosystemName, ecosystemSlug *string
 
-			if err := rows.Scan(&id, &fullName, &language, &tagsJSON, &category, &starsCount, &forksCount, &openIssuesCount, &openPRsCount, &contributorsCount, &createdAt, &updatedAt, &ecosystemName, &ecosystemSlug); err != nil {
+			if err := rows.Scan(&id, &fullName, &installationID, &language, &tagsJSON, &category, &starsCount, &forksCount, &openIssuesCount, &openPRsCount, &contributorsCount, &createdAt, &updatedAt, &ecosystemName, &ecosystemSlug); err != nil {
 				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "recommended_projects_scan_failed"})
 			}
 
@@ -707,23 +775,20 @@ LIMIT $1
 				forks = *forksCount
 			}
 
-			// Get repo description and fresh data from GitHub (best effort)
-			// Skip private repos - we can't fetch their data without authentication
+			// Get repo description and fresh data from GitHub (best effort).
+			// IMPORTANT: Do NOT drop projects if GitHub enrichment fails (rate limits, transient errors).
 			var description string
-			repo, repoErr := gh.GetRepo(ctx, "", fullName)
+			token := ""
+			if installationID != nil {
+				token = h.installationToken(ctx, *installationID)
+			}
+			repo, repoErr := gh.GetRepo(ctx, token, fullName)
 			if repoErr != nil {
-				// If GitHub fetch fails (404/403), it's likely a private repo
-				// Skip private repositories - we can't access their content without auth
-				errStr := repoErr.Error()
-				if strings.Contains(errStr, "404") || strings.Contains(errStr, "403") || strings.Contains(errStr, "Not Found") {
-					slog.Info("skipping private or inaccessible repository in recommended",
-						"project_id", id,
-						"github_full_name", fullName,
-						"error", repoErr,
-					)
-					continue // Skip this project
-				}
-				// For other errors, continue without description
+				slog.Warn("github repo enrichment failed in recommended (continuing without github metadata)",
+					"project_id", id,
+					"github_full_name", fullName,
+					"error", repoErr,
+				)
 			} else {
 				// Check if repo is private
 				if repo.Private {

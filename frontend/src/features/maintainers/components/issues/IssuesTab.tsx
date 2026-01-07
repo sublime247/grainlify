@@ -18,6 +18,8 @@ interface IssuesTabProps {
   onNavigate: (page: string) => void;
   selectedProjects: Project[];
   onRefresh?: () => void;
+  initialSelectedIssueId?: string;
+  initialSelectedProjectId?: string;
 }
 
 interface CommentFromAPI {
@@ -46,7 +48,7 @@ interface IssueFromAPI {
   last_seen_at: string;
 }
 
-export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTabProps) {
+export function IssuesTab({ onNavigate, selectedProjects, onRefresh, initialSelectedIssueId, initialSelectedProjectId }: IssuesTabProps) {
   const { theme } = useTheme();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
@@ -55,15 +57,18 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
   const [issueDetailTab, setIssueDetailTab] = useState<'applications' | 'discussions'>('applications');
   const [isFilterModalOpen, setIsFilterModalOpen] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState({
-    status: [] as string[],
-    applicants: [] as string[],
-    assignee: [] as string[],
-    stale: [] as string[],
+    // Radio-like filters (at most one selection each)
+    status: ['open'] as string[], // default to open issues only
+    applicants: [] as string[], // 'yes' | 'no'
+    assignee: [] as string[],   // 'yes' | 'no'
+    stale: [] as string[],      // 'yes' | 'no'
+    repositoryId: null as string | null, // selected project id
     categories: [] as string[],
     languages: [] as string[],
     labels: [] as string[],
   });
   const [labelSearch, setLabelSearch] = useState('');
+  const [repoSearch, setRepoSearch] = useState('');
   const [expandedApplications, setExpandedApplications] = useState<Record<string, boolean>>({});
   const [issues, setIssues] = useState<Array<IssueFromAPI & { projectName: string; projectId: string }>>([]);
   const [isLoadingIssues, setIsLoadingIssues] = useState(true);
@@ -218,7 +223,56 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
 
   const applicationData = getApplicationData(selectedIssue, selectedIssueFromAPI);
   const isDark = theme === 'dark';
-  const appliedFilterCount = selectedFilters.status.length + selectedFilters.applicants.length + selectedFilters.assignee.length + selectedFilters.stale.length + selectedFilters.categories.length + selectedFilters.languages.length + selectedFilters.labels.length;
+  const appliedFilterCount =
+    selectedFilters.status.length +
+    selectedFilters.applicants.length +
+    selectedFilters.assignee.length +
+    selectedFilters.stale.length +
+    (selectedFilters.repositoryId ? 1 : 0) +
+    selectedFilters.categories.length +
+    selectedFilters.languages.length +
+    selectedFilters.labels.length;
+
+  // If we were opened from a deep-link (e.g. project detail click), auto-select the target issue.
+  useEffect(() => {
+    if (!initialSelectedIssueId) return;
+    if (isLoadingIssues) return;
+    if (selectedIssue) return;
+    if (!issues || issues.length === 0) return;
+
+    const match = issues.find((it) => it.github_issue_id?.toString() === initialSelectedIssueId);
+    if (!match) return;
+
+    const timeAgoFormatted = formatTimeAgo(match.updated_at);
+    const issueForCard: Issue = {
+      id: match.github_issue_id.toString(),
+      number: match.number,
+      title: match.title,
+      repository: match.projectName,
+      repo: match.projectName,
+      user: match.author_login,
+      timeAgo: timeAgoFormatted,
+      tags: match.labels?.map((l: any) => l.name || l) || [],
+      applicants: match.comments_count || 0,
+      comments: match.comments_count || 0,
+      applicant: undefined,
+      applicationStatus: 'pending',
+      discussions: [],
+      url: match.url,
+    };
+
+    setSelectedIssue(issueForCard);
+    setSelectedIssueFromAPI(match);
+  }, [initialSelectedIssueId, isLoadingIssues, issues, selectedIssue, formatTimeAgo]);
+
+  // Pre-select a repository when provided (e.g. from project detail click)
+  useEffect(() => {
+    if (!initialSelectedProjectId) return;
+    setSelectedFilters((prev) => {
+      if (prev.repositoryId) return prev;
+      return { ...prev, repositoryId: initialSelectedProjectId };
+    });
+  }, [initialSelectedProjectId]);
 
   return (
     <div className="flex gap-6 h-[calc(100vh-220px)]">
@@ -297,39 +351,34 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
                     issue.author_login.toLowerCase().includes(searchQuery.toLowerCase());
                   
                   // Status filter
-                  const matchesStatus = selectedFilters.status.length === 0 || 
-                    selectedFilters.status.includes(issue.state);
+                  const status = selectedFilters.status[0] || 'open';
+                  const matchesStatus = issue.state === status;
                   
                   // Applicants filter
-                  const matchesApplicants = selectedFilters.applicants.length === 0 || 
-                    selectedFilters.applicants.some(filter => {
-                      const applicantCount = issue.comments_count || 0;
-                      if (filter === 'no applicants') return applicantCount === 0;
-                      if (filter === '1-5 applicants') return applicantCount >= 1 && applicantCount <= 5;
-                      if (filter === '6-10 applicants') return applicantCount >= 6 && applicantCount <= 10;
-                      if (filter === '10+ applicants') return applicantCount > 10;
-                      return false;
-                    });
+                  const applicants = selectedFilters.applicants[0]; // 'yes' | 'no' | undefined
+                  const applicantCount = issue.comments_count || 0;
+                  const matchesApplicants =
+                    !applicants ||
+                    (applicants === 'yes' ? applicantCount > 0 : applicantCount === 0);
                   
-                  // Assignee filter (check if author matches)
-                  const matchesAssignee = selectedFilters.assignee.length === 0 || 
-                    selectedFilters.assignee.includes(issue.author_login.toLowerCase());
+                  // Assignee filter (based on assignees array)
+                  const assignee = selectedFilters.assignee[0]; // 'yes' | 'no' | undefined
+                  const assigneesCount = Array.isArray(issue.assignees) ? issue.assignees.length : 0;
+                  const matchesAssignee =
+                    !assignee ||
+                    (assignee === 'yes' ? assigneesCount > 0 : assigneesCount === 0);
                   
                   // Stale filter (issues older than 30 days)
-                  const matchesStale = selectedFilters.stale.length === 0 || 
-                    selectedFilters.stale.some(filter => {
-                      if (filter === 'not stale') {
-                        const updatedAt = issue.updated_at ? new Date(issue.updated_at) : new Date(issue.last_seen_at);
-                        const daysSinceUpdate = (Date.now() - updatedAt.getTime()) / (1000 * 60 * 60 * 24);
-                        return daysSinceUpdate < 30;
-                      }
-                      if (filter === 'stale') {
-                        const updatedAt = issue.updated_at ? new Date(issue.updated_at) : new Date(issue.last_seen_at);
-                        const daysSinceUpdate = (Date.now() - updatedAt.getTime()) / (1000 * 60 * 60 * 24);
-                        return daysSinceUpdate >= 30;
-                      }
-                      return false;
-                    });
+                  const stale = selectedFilters.stale[0]; // 'yes' | 'no' | undefined
+                  const updatedAt = issue.updated_at ? new Date(issue.updated_at) : new Date(issue.last_seen_at);
+                  const daysSinceUpdate = (Date.now() - updatedAt.getTime()) / (1000 * 60 * 60 * 24);
+                  const isStale = daysSinceUpdate >= 30;
+                  const matchesStale =
+                    !stale ||
+                    (stale === 'yes' ? isStale : !isStale);
+
+                  // Repository filter
+                  const matchesRepository = !selectedFilters.repositoryId || issue.projectId === selectedFilters.repositoryId;
                   
                   // Categories filter (check tags)
                   const matchesCategories = selectedFilters.categories.length === 0 || 
@@ -349,7 +398,7 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
                     });
                   
                   return matchesSearch && matchesStatus && matchesApplicants && matchesAssignee && 
-                         matchesStale && matchesCategories && matchesLanguages && matchesLabels;
+                         matchesStale && matchesRepository && matchesCategories && matchesLanguages && matchesLabels;
                 })
                 .map((issue) => {
                   // Convert API issue to Issue type for compatibility
@@ -857,6 +906,69 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 scrollbar-custom space-y-4">
+              {/* Repository */}
+              <div>
+                <h3 className={`text-[12px] font-semibold mb-2 transition-colors ${
+                  isDark ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
+                }`}>Repository</h3>
+
+                {/* Search Bar */}
+                <div className={`mb-2.5 px-3 py-2 rounded-[8px] border transition-colors ${
+                  isDark
+                    ? 'bg-white/[0.08] border-white/15'
+                    : 'bg-white/[0.15] border-white/25'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <Search className={`w-3.5 h-3.5 flex-shrink-0 ${isDark ? 'text-[#b8a898]' : 'text-[#7a6b5a]'}`} />
+                    <input
+                      type="text"
+                      placeholder="Search repositories"
+                      value={repoSearch}
+                      onChange={(e) => setRepoSearch(e.target.value)}
+                      className={`flex-1 bg-transparent border-none outline-none text-[12px] placeholder:text-[12px] transition-colors ${
+                        isDark
+                          ? 'text-[#e8dfd0] placeholder-[#b8a898]/60'
+                          : 'text-[#2d2820] placeholder-[#7a6b5a]/60'
+                      }`}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setSelectedFilters(prev => ({ ...prev, repositoryId: null }))}
+                    className={`px-2.5 py-1.5 rounded-[8px] text-[11px] font-semibold transition-all border ${
+                      !selectedFilters.repositoryId
+                        ? 'bg-[#c9983a]/20 border-[#c9983a] text-[#c9983a]'
+                        : isDark
+                          ? 'bg-white/[0.08] border-white/15 text-[#e8dfd0] hover:bg-white/[0.12]'
+                          : 'bg-white/[0.15] border-white/25 text-[#7a6b5a] hover:bg-white/[0.2]'
+                    }`}
+                  >
+                    All projects
+                  </button>
+
+                  {selectedProjects
+                    .filter((p) => p.github_full_name.toLowerCase().includes(repoSearch.toLowerCase()))
+                    .slice(0, 25)
+                    .map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => setSelectedFilters(prev => ({ ...prev, repositoryId: p.id }))}
+                        className={`px-2.5 py-1.5 rounded-[8px] text-[11px] font-semibold transition-all border ${
+                          selectedFilters.repositoryId === p.id
+                            ? 'bg-[#c9983a]/20 border-[#c9983a] text-[#c9983a]'
+                            : isDark
+                              ? 'bg-white/[0.08] border-white/15 text-[#e8dfd0] hover:bg-white/[0.12]'
+                              : 'bg-white/[0.15] border-white/25 text-[#7a6b5a] hover:bg-white/[0.2]'
+                        }`}
+                      >
+                        {p.github_full_name}
+                      </button>
+                    ))}
+                </div>
+              </div>
+
               {/* Status & Applicants - Two Column */}
               <div className="grid grid-cols-2 gap-3">
                 {/* Status */}
@@ -865,25 +977,15 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
                     isDark ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
                   }`}>Status</h3>
                   <div className="flex gap-2">
-                    {['Open', 'Close'].map((status) => (
+                    {['Open', 'Closed'].map((status) => (
                       <button
                         key={status}
                         onClick={() => {
-                          const lowerStatus = status.toLowerCase();
-                          if (selectedFilters.status.includes(lowerStatus)) {
-                            setSelectedFilters(prev => ({
-                              ...prev,
-                              status: prev.status.filter(s => s !== lowerStatus)
-                            }));
-                          } else {
-                            setSelectedFilters(prev => ({
-                              ...prev,
-                              status: [...prev.status, lowerStatus]
-                            }));
-                          }
+                          const value = status === 'Open' ? 'open' : 'closed';
+                          setSelectedFilters(prev => ({ ...prev, status: [value] }));
                         }}
                         className={`flex-1 px-2 py-1.5 rounded-[8px] text-[12px] font-semibold transition-all border ${
-                          selectedFilters.status.includes(status.toLowerCase())
+                          selectedFilters.status[0] === (status === 'Open' ? 'open' : 'closed')
                             ? 'bg-[#c9983a]/20 border-[#c9983a] text-[#c9983a]'
                             : isDark
                               ? 'bg-white/[0.08] border-white/15 text-[#e8dfd0] hover:bg-white/[0.12]'
@@ -906,21 +1008,14 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
                       <button
                         key={applicant}
                         onClick={() => {
-                          const lowerApplicant = applicant.toLowerCase();
-                          if (selectedFilters.applicants.includes(lowerApplicant)) {
-                            setSelectedFilters(prev => ({
-                              ...prev,
-                              applicants: prev.applicants.filter(a => a !== lowerApplicant)
-                            }));
-                          } else {
-                            setSelectedFilters(prev => ({
-                              ...prev,
-                              applicants: [...prev.applicants, lowerApplicant]
-                            }));
-                          }
+                          const v = applicant.toLowerCase();
+                          setSelectedFilters(prev => ({
+                            ...prev,
+                            applicants: prev.applicants[0] === v ? [] : [v]
+                          }));
                         }}
                         className={`flex-1 px-2 py-1.5 rounded-[8px] text-[12px] font-semibold transition-all border ${
-                          selectedFilters.applicants.includes(applicant.toLowerCase())
+                          selectedFilters.applicants[0] === applicant.toLowerCase()
                             ? 'bg-[#c9983a]/20 border-[#c9983a] text-[#c9983a]'
                             : isDark
                               ? 'bg-white/[0.08] border-white/15 text-[#e8dfd0] hover:bg-white/[0.12]'
@@ -946,21 +1041,14 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
                       <button
                         key={assignee}
                         onClick={() => {
-                          const lowerAssignee = assignee.toLowerCase();
-                          if (selectedFilters.assignee.includes(lowerAssignee)) {
-                            setSelectedFilters(prev => ({
-                              ...prev,
-                              assignee: prev.assignee.filter(a => a !== lowerAssignee)
-                            }));
-                          } else {
-                            setSelectedFilters(prev => ({
-                              ...prev,
-                              assignee: [...prev.assignee, lowerAssignee]
-                            }));
-                          }
+                          const v = assignee.toLowerCase();
+                          setSelectedFilters(prev => ({
+                            ...prev,
+                            assignee: prev.assignee[0] === v ? [] : [v]
+                          }));
                         }}
                         className={`flex-1 px-2 py-1.5 rounded-[8px] text-[12px] font-semibold transition-all border ${
-                          selectedFilters.assignee.includes(assignee.toLowerCase())
+                          selectedFilters.assignee[0] === assignee.toLowerCase()
                             ? 'bg-[#c9983a]/20 border-[#c9983a] text-[#c9983a]'
                             : isDark
                               ? 'bg-white/[0.08] border-white/15 text-[#e8dfd0] hover:bg-white/[0.12]'
@@ -983,21 +1071,14 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
                       <button
                         key={stale}
                         onClick={() => {
-                          const lowerStale = stale.toLowerCase();
-                          if (selectedFilters.stale.includes(lowerStale)) {
-                            setSelectedFilters(prev => ({
-                              ...prev,
-                              stale: prev.stale.filter(s => s !== lowerStale)
-                            }));
-                          } else {
-                            setSelectedFilters(prev => ({
-                              ...prev,
-                              stale: [...prev.stale, lowerStale]
-                            }));
-                          }
+                          const v = stale.toLowerCase();
+                          setSelectedFilters(prev => ({
+                            ...prev,
+                            stale: prev.stale[0] === v ? [] : [v]
+                          }));
                         }}
                         className={`flex-1 px-2 py-1.5 rounded-[8px] text-[12px] font-semibold transition-all border ${
-                          selectedFilters.stale.includes(stale.toLowerCase())
+                          selectedFilters.stale[0] === stale.toLowerCase()
                             ? 'bg-[#c9983a]/20 border-[#c9983a] text-[#c9983a]'
                             : isDark
                               ? 'bg-white/[0.08] border-white/15 text-[#e8dfd0] hover:bg-white/[0.12]'
@@ -1151,15 +1232,17 @@ export function IssuesTab({ onNavigate, selectedProjects, onRefresh }: IssuesTab
               <button
                 onClick={() => {
                   setSelectedFilters({
-                    status: [],
+                    status: ['open'],
                     applicants: [],
                     assignee: [],
                     stale: [],
+                    repositoryId: null,
                     categories: [],
                     languages: [],
                     labels: [],
                   });
                   setLabelSearch('');
+                  setRepoSearch('');
                 }}
                 className={`px-4 py-2 rounded-[10px] text-[12px] font-semibold transition-all hover:scale-[1.02] ${
                   isDark
