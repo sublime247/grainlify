@@ -41,43 +41,6 @@ Grainlify sits **between ecosystems and contributors**, ensuring that:
 
 Grainlify supports both **time-boxed programs** and **continuous contributions**.
 
-### A. Monthly Hackathons (Program Mode)
-
-- Grainlify runs **monthly hackathons** (e.g. 1 week)
-- Multiple projects from different ecosystems participate
-- All contributions are tracked during the event
-- Each hackathon has:
-  - a **fixed prize pool**
-  - a **fixed total point supply**
-
-#### Example
-
-- Prize pool: $10,000 (locked before start)
-- Total points: 10,000
-- Conversion: 1 point = $1
-
-Contributors earn points based on:
-
-- PRs merged
-- issue difficulty
-- maintainer-defined weights
-
-At the end:
-
-- points are finalized
-- rewards are calculated proportionally
-- payouts are executed automatically
-
-### B. Always-On Bounties (Continuous Mode)
-
-Outside hackathons:
-
-- Maintainers can create bounties anytime
-- Each bounty:
-  - is linked to a GitHub issue
-  - has a fixed reward (points or amount)
-  - is fully escrow-backed
-
 This enables **continuous OSS funding**, not just events.
 
 ---
