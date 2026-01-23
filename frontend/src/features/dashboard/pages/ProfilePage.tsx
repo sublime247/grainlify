@@ -389,47 +389,48 @@ export function ProfilePage({
     // Priority: merged > draft > state
     if (merged) {
       return {
-        iconBgColor: "bg-gradient-to-br from-purple-500/60 to-purple-600/50",
+        iconBgColor: "bg-gradient-to-br from-[#c9983a]/80 to-[#d4af37]/60",
         icon: GitMerge,
         badgeText: "Merged",
-        badgeColor: "bg-purple-500/40 border-purple-500/60 text-purple-200",
-        shadowColor: "shadow-[0_4px_16px_rgba(168,85,247,0.4)]",
+        badgeColor: "bg-[#c9983a]/40 border-[#d4af37]/60 text-[#f5d98a]",
+        shadowColor: "shadow-[0_4px_16px_rgba(201,152,58,0.5)]",
         hoverShadow:
-          "group-hover/item:shadow-[0_5px_20px_rgba(168,85,247,0.5)]",
+          "group-hover/item:shadow-[0_5px_20px_rgba(201,152,58,0.6)]",
       };
     }
 
     if (draft) {
       return {
-        iconBgColor: "bg-gradient-to-br from-gray-500/50 to-gray-600/40",
+        iconBgColor: "bg-gradient-to-br from-[#c9983a]/30 to-[#a67c2e]/20",
         icon: FileEdit,
         badgeText: "Draft",
-        badgeColor: "bg-gray-500/30 border-gray-500/50 text-gray-300",
-        shadowColor: "shadow-[0_4px_16px_rgba(107,114,128,0.3)]",
+        badgeColor: "bg-[#c9983a]/20 border-[#c9983a]/40 text-[#d4c5b0]",
+        shadowColor: "shadow-[0_4px_16px_rgba(201,152,58,0.25)]",
         hoverShadow:
-          "group-hover/item:shadow-[0_5px_20px_rgba(107,114,128,0.4)]",
+          "group-hover/item:shadow-[0_5px_20px_rgba(201,152,58,0.35)]",
       };
     }
 
     if (state === "open") {
       return {
-        iconBgColor: "bg-gradient-to-br from-green-500/60 to-green-600/50",
+        iconBgColor: "bg-gradient-to-br from-[#c9983a]/60 to-[#d4af37]/50",
         icon: GitPullRequest,
         badgeText: "Open",
-        badgeColor: "bg-green-500/40 border-green-500/60 text-green-200",
-        shadowColor: "shadow-[0_4px_16px_rgba(34,197,94,0.4)]",
-        hoverShadow: "group-hover/item:shadow-[0_5px_20px_rgba(34,197,94,0.5)]",
+        badgeColor: "bg-[#c9983a]/35 border-[#d4af37]/50 text-[#f5c563]",
+        shadowColor: "shadow-[0_4px_16px_rgba(201,152,58,0.4)]",
+        hoverShadow:
+          "group-hover/item:shadow-[0_5px_20px_rgba(201,152,58,0.5)]",
       };
     }
 
     // Closed (not merged)
     return {
-      iconBgColor: "bg-gradient-to-br from-red-500/60 to-red-600/50",
+      iconBgColor: "bg-gradient-to-br from-[#8b7355]/50 to-[#6b5d4d]/40",
       icon: X,
       badgeText: "Closed",
-      badgeColor: "bg-red-500/40 border-red-500/60 text-red-200",
-      shadowColor: "shadow-[0_4px_16px_rgba(239,68,68,0.4)]",
-      hoverShadow: "group-hover/item:shadow-[0_5px_20px_rgba(239,68,68,0.5)]",
+      badgeColor: "bg-[#8b7355]/30 border-[#8b7355]/50 text-[#b8a898]",
+      shadowColor: "shadow-[0_4px_16px_rgba(139,115,85,0.3)]",
+      hoverShadow: "group-hover/item:shadow-[0_5px_20px_rgba(139,115,85,0.4)]",
     };
   };
 
