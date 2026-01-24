@@ -6,7 +6,7 @@ export type UserRole = 'contributor' | 'maintainer' | 'admin' | null;
 export interface User {
   id: string;
   role: string;
-  github?: {
+  github: {
     login: string;
     avatar_url: string;
   };
@@ -31,34 +31,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   const checkAuth = async () => {
-    // DEV BYPASS: Immediately set a mock user if no backend is available
-    // Remove this block when backend connection is restored
-    // eslint-disable-next-line no-constant-condition
-    /* if (true) { 
-      console.log('AuthContext - DEV BYPASS: Setting mock user');
-      // Use localStorage directly to avoid triggering the 'patchwork-auth-token' event listener
-      // which would cause an infinite loop since it calls checkAuth()
-      if (localStorage.getItem('patchwork_jwt') !== 'mock-dev-token') {
-        localStorage.setItem('patchwork_jwt', 'mock-dev-token');
-      }
-      
-      const mockUser: User = {
-        id: 'dev-user-id',
-        role: 'admin',
-        github: {
-          login: 'dev-user',
-          avatar_url: ''
-        }
-      };
-      setUser(mockUser);
-      setUserRole('admin');
-      setUserId('dev-user-id');
-      setIsLoading(false);
-      return;
-    } */
-
-    // Unreachable code due to DEV BYPASS above. Kept for future reference.
-    
     const token = getAuthToken();
       console.log('AuthContext - Checking authentication on mount');
       console.log('AuthContext - Token found:', token ? 'Yes' : 'No');
@@ -74,7 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log('AuthContext - User authenticated:', { 
             role: userData.role, 
             id: userData.id, 
-            githubLogin: userData.github?.login 
+            githubLogin: userData.github.login 
           });
         } catch (error) {
           // Token is invalid, remove it
@@ -92,7 +64,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setIsLoading(false);
       console.log('AuthContext - Loading complete');
-    
   };
 
   // Check for existing token on mount
@@ -150,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role: userData.role, 
         id: userData.id, 
         isAuthenticated: true,
-        githubLogin: userData.github?.login
+        githubLogin: userData.github.login
       });
     } catch (error) {
       console.error('AuthContext - Login failed:', error);
