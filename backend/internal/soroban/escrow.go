@@ -176,10 +176,13 @@ func (ec *EscrowContract) ReleaseFunds(ctx context.Context, bountyID uint64, con
 	return confirmed, nil
 }
 
-// Refund refunds funds to the original depositor if deadline has passed
-func (ec *EscrowContract) Refund(ctx context.Context, bountyID uint64) (*TransactionResult, error) {
-	ec.client.LogContractInteraction(ec.contractAddress, "refund", map[string]interface{}{
+// ApproveRefund approves a refund before deadline (admin only)
+func (ec *EscrowContract) ApproveRefund(ctx context.Context, bountyID uint64, amount int64, recipientAddress string, mode RefundMode) (*TransactionResult, error) {
+	ec.client.LogContractInteraction(ec.contractAddress, "approve_refund", map[string]interface{}{
 		"bounty_id": bountyID,
+		"amount":    amount,
+		"recipient": recipientAddress,
+		"mode":      mode,
 	})
 
 	// Encode contract address
@@ -194,7 +197,104 @@ func (ec *EscrowContract) Refund(ctx context.Context, bountyID uint64) (*Transac
 		return nil, fmt.Errorf("failed to encode bounty_id: %w", err)
 	}
 
-	args := []xdr.ScVal{bountyIDVal}
+	amountVal, err := EncodeScValInt64(amount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode amount: %w", err)
+	}
+
+	recipientVal, err := EncodeScValAddress(recipientAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode recipient address: %w", err)
+	}
+
+	modeVal, err := EncodeScValRefundMode(mode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode refund mode: %w", err)
+	}
+
+	args := []xdr.ScVal{bountyIDVal, amountVal, recipientVal, modeVal}
+
+	// Build InvokeHostFunction operation
+	op, err := BuildInvokeHostFunctionOp(contractAddr, "approve_refund", args)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build operation: %w", err)
+	}
+
+	// Build and submit transaction
+	result, err := ec.txBuilder.BuildAndSubmit(ctx, []txnbuild.Operation{op})
+	if err != nil {
+		return nil, fmt.Errorf("failed to submit transaction: %w", err)
+	}
+
+	// Wait for confirmation
+	confirmed, err := ec.txBuilder.WaitForConfirmation(ctx, result.Hash, 60*time.Second)
+	if err != nil {
+		slog.Warn("failed to wait for confirmation", "error", err, "tx_hash", result.Hash)
+		return result, nil
+	}
+
+	return confirmed, nil
+}
+
+// Refund refunds funds with support for Full, Partial, and Custom refunds
+// - amount: optional, required for Partial and Custom modes
+// - recipient: optional, required for Custom mode
+// - mode: Full, Partial, or Custom
+func (ec *EscrowContract) Refund(ctx context.Context, bountyID uint64, amount *int64, recipientAddress *string, mode RefundMode) (*TransactionResult, error) {
+	ec.client.LogContractInteraction(ec.contractAddress, "refund", map[string]interface{}{
+		"bounty_id": bountyID,
+		"amount":    amount,
+		"recipient": recipientAddress,
+		"mode":      mode,
+	})
+
+	// Encode contract address
+	contractAddr, err := EncodeContractAddress(ec.contractAddress)
+	if err != nil {
+		return nil, fmt.Errorf("invalid contract address: %w", err)
+	}
+
+	// Encode function arguments
+	bountyIDVal, err := EncodeScValUint64(bountyID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode bounty_id: %w", err)
+	}
+
+	// Encode optional amount
+	var amountVal *xdr.ScVal
+	if amount != nil {
+		val, err := EncodeScValInt64(*amount)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode amount: %w", err)
+		}
+		amountVal = &val
+	}
+	amountOptVal, err := EncodeScValOption(amountVal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode optional amount: %w", err)
+	}
+
+	// Encode optional recipient
+	var recipientVal *xdr.ScVal
+	if recipientAddress != nil {
+		val, err := EncodeScValAddress(*recipientAddress)
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode recipient address: %w", err)
+		}
+		recipientVal = &val
+	}
+	recipientOptVal, err := EncodeScValOption(recipientVal)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode optional recipient: %w", err)
+	}
+
+	// Encode refund mode
+	modeVal, err := EncodeScValRefundMode(mode)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode refund mode: %w", err)
+	}
+
+	args := []xdr.ScVal{bountyIDVal, amountOptVal, recipientOptVal, modeVal}
 
 	// Build InvokeHostFunction operation
 	op, err := BuildInvokeHostFunctionOp(contractAddr, "refund", args)
@@ -216,6 +316,24 @@ func (ec *EscrowContract) Refund(ctx context.Context, bountyID uint64) (*Transac
 	}
 
 	return confirmed, nil
+}
+
+// GetRefundEligibility retrieves refund eligibility information (read-only)
+func (ec *EscrowContract) GetRefundEligibility(ctx context.Context, bountyID uint64) (*RefundEligibility, error) {
+	// This is a read-only operation, uses RPC simulation
+	// Implementation would require building transaction XDR and calling simulateTransaction
+	// For now, return a placeholder
+	slog.Warn("GetRefundEligibility requires transaction building and XDR decoding")
+	return nil, fmt.Errorf("GetRefundEligibility requires transaction building - use RPC simulateTransaction")
+}
+
+// GetRefundHistory retrieves refund history for a bounty (read-only)
+func (ec *EscrowContract) GetRefundHistory(ctx context.Context, bountyID uint64) ([]RefundRecord, error) {
+	// This is a read-only operation, uses RPC simulation
+	// Implementation would require building transaction XDR and calling simulateTransaction
+	// For now, return a placeholder
+	slog.Warn("GetRefundHistory requires transaction building and XDR decoding")
+	return nil, fmt.Errorf("GetRefundHistory requires transaction building - use RPC simulateTransaction")
 }
 
 // GetEscrowInfo retrieves escrow information (read-only, uses RPC simulation)

@@ -19,17 +19,55 @@ const (
 type EscrowStatus string
 
 const (
-	EscrowStatusLocked   EscrowStatus = "Locked"
-	EscrowStatusReleased EscrowStatus = "Released"
-	EscrowStatusRefunded EscrowStatus = "Refunded"
+	EscrowStatusLocked           EscrowStatus = "Locked"
+	EscrowStatusReleased         EscrowStatus = "Released"
+	EscrowStatusRefunded         EscrowStatus = "Refunded"
+	EscrowStatusPartiallyRefunded EscrowStatus = "PartiallyRefunded"
+)
+
+// RefundMode represents the type of refund
+type RefundMode string
+
+const (
+	RefundModeFull   RefundMode = "Full"
+	RefundModePartial RefundMode = "Partial"
+	RefundModeCustom RefundMode = "Custom"
 )
 
 // EscrowData represents escrow information from the contract
 type EscrowData struct {
-	Depositor string       `json:"depositor"`
-	Amount    int64        `json:"amount"`
-	Status    EscrowStatus `json:"status"`
-	Deadline  int64        `json:"deadline"`
+	Depositor      string       `json:"depositor"`
+	Amount         int64        `json:"amount"`
+	Status         EscrowStatus `json:"status"`
+	Deadline       int64        `json:"deadline"`
+	RemainingAmount int64        `json:"remaining_amount"`
+	RefundHistory  []RefundRecord `json:"refund_history"`
+}
+
+// RefundRecord represents a single refund transaction
+type RefundRecord struct {
+	Amount    int64      `json:"amount"`
+	Recipient string     `json:"recipient"`
+	Mode      RefundMode `json:"mode"`
+	Timestamp int64      `json:"timestamp"`
+}
+
+// RefundApproval represents an admin-approved refund request
+type RefundApproval struct {
+	BountyID   uint64     `json:"bounty_id"`
+	Amount     int64      `json:"amount"`
+	Recipient  string     `json:"recipient"`
+	Mode       RefundMode `json:"mode"`
+	ApprovedBy string     `json:"approved_by"`
+	ApprovedAt int64      `json:"approved_at"`
+}
+
+// RefundEligibility represents refund eligibility information
+type RefundEligibility struct {
+	CanRefund      bool           `json:"can_refund"`
+	DeadlinePassed bool           `json:"deadline_passed"`
+	RemainingAmount int64         `json:"remaining_amount"`
+	Approval       *RefundApproval `json:"approval,omitempty"`
 }
 
 // ProgramEscrowData represents program escrow information

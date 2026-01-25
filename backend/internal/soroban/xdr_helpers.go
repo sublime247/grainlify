@@ -86,6 +86,50 @@ func EncodeScSymbol(s string) (xdr.ScSymbol, error) {
 	return xdr.ScSymbol(s), nil
 }
 
+// EncodeScValRefundMode encodes a RefundMode enum as ScVal
+func EncodeScValRefundMode(mode RefundMode) (xdr.ScVal, error) {
+	// RefundMode is an enum: Full = 0, Partial = 1, Custom = 2
+	var enumVal uint32
+	switch mode {
+	case RefundModeFull:
+		enumVal = 0
+	case RefundModePartial:
+		enumVal = 1
+	case RefundModeCustom:
+		enumVal = 2
+	default:
+		return xdr.ScVal{}, fmt.Errorf("invalid refund mode: %s", mode)
+	}
+
+	// Encode as enum (u32)
+	u32 := xdr.Uint32(enumVal)
+	return xdr.ScVal{
+		Type: xdr.ScValTypeScvU32,
+		U32:  &u32,
+	}, nil
+}
+
+// EncodeScValOption encodes an optional ScVal as Soroban Option
+// In Soroban, Option<T> is represented as Vec<T> with 0 (None) or 1 (Some) elements
+func EncodeScValOption(val *xdr.ScVal) (xdr.ScVal, error) {
+	if val == nil {
+		// None variant - empty Vec
+		vec := xdr.ScVec{}
+		vecPtr := &vec
+		return xdr.ScVal{
+			Type: xdr.ScValTypeScvVec,
+			Vec:  &vecPtr,
+		}, nil
+	}
+	// Some variant - Vec with one element
+	vec := xdr.ScVec{*val}
+	vecPtr := &vec
+	return xdr.ScVal{
+		Type: xdr.ScValTypeScvVec,
+		Vec:  &vecPtr,
+	}, nil
+}
+
 // BuildInvokeHostFunctionOp builds an InvokeHostFunction operation for contract calls
 func BuildInvokeHostFunctionOp(contractAddress xdr.ScAddress, functionName string, args []xdr.ScVal) (txnbuild.Operation, error) {
 	symbol, err := EncodeScSymbol(functionName)
