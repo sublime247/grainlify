@@ -10,11 +10,12 @@ import {
   getAdminOpenSourceWeekEvents,
   deleteOpenSourceWeekEvent,
   getAdminProjects,
-  deleteAdminProject
+  deleteAdminProject,
+  createProject
 } from '../../../shared/api/client';
 import { ProjectCard, Project } from '../../dashboard/components/ProjectCard';
 
-// Helper functions (copied from BrowsePage for consistency)
+// Helper functions (consistent with BrowsePage)
 const formatNumber = (num: number): string => {
   if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
   if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
@@ -62,13 +63,13 @@ interface Ecosystem {
 
 export function AdminPage() {
   const { theme } = useTheme();
-  const [activeTab, setActiveTab] = useState<'ecosystems' | 'projects' | 'osw'>('ecosystems');
   const [showAddModal, setShowAddModal] = useState(false);
   const [ecosystems, setEcosystems] = useState<Ecosystem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+  const [activeTab, setActiveTab] = useState<'ecosystems' | 'projects' | 'events'>('ecosystems');
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -110,6 +111,12 @@ export function AdminPage() {
   const [isAdminProjectsLoading, setIsAdminProjectsLoading] = useState(true);
   const [projectDeleteConfirm, setProjectDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
+  const [showAddProjectModal, setShowAddProjectModal] = useState(false);
+  const [projectFormData, setProjectFormData] = useState({
+    github_full_name: '',
+    ecosystem_name: '',
+    language: ''
+  });
 
   const fetchAdminProjects = useCallback(async () => {
     try {
@@ -196,12 +203,9 @@ export function AdminPage() {
     fetchOswEvents();
     fetchAdminProjects();
 
-    const handleEcosystemsUpdated = () => {
-      fetchEcosystems();
-    };
-    const handleProjectsUpdated = () => {
-      fetchAdminProjects();
-    };
+    const handleEcosystemsUpdated = () => fetchEcosystems();
+    const handleProjectsUpdated = () => fetchAdminProjects();
+
     window.addEventListener('ecosystems-updated', handleEcosystemsUpdated);
     window.addEventListener('projects-updated', handleProjectsUpdated);
     return () => {
@@ -228,7 +232,8 @@ export function AdminPage() {
     }
   };
 
-  const confirmDeleteProject = (_e: React.MouseEvent, id: string, name: string) => {
+  const confirmDeleteProject = (e: React.MouseEvent, id: string, name: string) => {
+    e.stopPropagation();
     setProjectDeleteConfirm({ id, name });
   };
 
@@ -243,6 +248,26 @@ export function AdminPage() {
       setErrorMessage(e instanceof Error ? e.message : 'Failed to delete project.');
     } finally {
       setIsDeletingProject(false);
+    }
+  };
+
+  const handleCreateProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    try {
+      setErrorMessage(null);
+      await createProject({
+        github_full_name: projectFormData.github_full_name,
+        ecosystem_name: projectFormData.ecosystem_name,
+        language: projectFormData.language || undefined,
+      });
+      setShowAddProjectModal(false);
+      setProjectFormData({ github_full_name: '', ecosystem_name: '', language: '' });
+      await fetchAdminProjects();
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to create project.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -337,7 +362,7 @@ export function AdminPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-10 pb-20">
       {/* Admin Header */}
       <div className={`backdrop-blur-[40px] bg-gradient-to-br rounded-[28px] border shadow-[0_8px_32px_rgba(0,0,0,0.08)] p-10 transition-all overflow-hidden relative ${theme === 'dark'
         ? 'from-white/[0.08] to-white/[0.04] border-white/10'
@@ -356,65 +381,77 @@ export function AdminPage() {
               </div>
               <p className={`text-[16px] max-w-3xl transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
                 }`}>
-                Manage ecosystems, review requests, and oversee platform operations.
+                Manage ecosystems, projects, and platform events from a single dashboard.
               </p>
             </div>
-            <div className="flex items-center gap-3">
-              <div className={`px-4 py-2 rounded-[12px] backdrop-blur-[20px] border transition-colors ${theme === 'dark'
-                ? 'bg-white/[0.08] border-white/15 text-[#d4d4d4]'
-                : 'bg-white/[0.15] border-white/25 text-[#7a6b5a]'
-                }`}>
-                <span className="text-[13px] font-medium">Admin Access</span>
-              </div>
+            <div className={`px-4 py-2 rounded-[12px] backdrop-blur-[20px] border transition-colors ${theme === 'dark'
+              ? 'bg-white/[0.08] border-white/15 text-[#d4d4d4]'
+              : 'bg-white/[0.15] border-white/25 text-[#7a6b5a]'
+              }`}>
+              <span className="text-[13px] font-medium">Admin Access Verified</span>
             </div>
+          </div>
+
+          {/* Admin Tabs */}
+          <div className="flex items-center gap-4 mt-10">
+            <button
+              onClick={() => setActiveTab('ecosystems')}
+              className={`px-6 py-2.5 rounded-[14px] text-[14px] font-bold transition-all ${activeTab === 'ecosystems'
+                ? 'bg-[#c9983a] text-white shadow-lg scale-105'
+                : 'bg-white/5 hover:bg-white/10 text-[#7a6b5a] border border-white/10'
+                }`}
+            >
+              Ecosystems
+            </button>
+            <button
+              onClick={() => setActiveTab('projects')}
+              className={`px-6 py-2.5 rounded-[14px] text-[14px] font-bold transition-all ${activeTab === 'projects'
+                ? 'bg-[#c9983a] text-white shadow-lg scale-105'
+                : 'bg-white/5 hover:bg-white/10 text-[#7a6b5a] border border-white/10'
+                }`}
+            >
+              Projects
+            </button>
+            <button
+              onClick={() => setActiveTab('events')}
+              className={`px-6 py-2.5 rounded-[14px] text-[14px] font-bold transition-all ${activeTab === 'events'
+                ? 'bg-[#c9983a] text-white shadow-lg scale-105'
+                : 'bg-white/5 hover:bg-white/10 text-[#7a6b5a] border border-white/10'
+                }`}
+            >
+              OSW Events
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Admin Tabs */}
-      <div className={`flex items-center gap-2 p-1.5 rounded-[18px] backdrop-blur-[20px] border shadow-sm w-fit ${theme === 'dark'
-        ? 'bg-white/[0.05] border-white/10'
-        : 'bg-white/[0.1] border-white/20'
-        }`}>
-        {[
-          { id: 'ecosystems', label: 'Ecosystems', icon: Globe },
-          { id: 'projects', label: 'Projects', icon: Package },
-          { id: 'osw', label: 'OSW Events', icon: Calendar },
-        ].map((tab) => {
-          const isActive = activeTab === tab.id;
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id as any)}
-              className={`flex items-center gap-2 px-6 py-2.5 rounded-[14px] text-[14px] font-semibold transition-all duration-300 ${isActive
-                ? 'bg-gradient-to-br from-[#c9983a] to-[#a67c2e] text-white shadow-[0_4px_12px_rgba(162,121,44,0.3)]'
-                : theme === 'dark'
-                  ? 'text-[#d4d4d4] hover:bg-white/10'
-                  : 'text-[#7a6b5a] hover:bg-white/20'
-                }`}
-            >
-              <Icon className="w-4 h-4" />
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
+      {/* Global Error Message */}
+      {errorMessage && (
+        <div className={`rounded-[16px] border px-6 py-4 flex items-center justify-between ${theme === 'dark' ? 'bg-red-500/10 border-red-500/20 text-red-200' : 'bg-red-50 border-red-200 text-red-700'}`}>
+          <p className="text-[14px]">{errorMessage}</p>
+          <button onClick={() => setErrorMessage(null)} className="opacity-50 hover:opacity-100"><Plus className="w-4 h-4 rotate-45" /></button>
+        </div>
+      )}
 
       {/* Tab Content */}
-      <div className="mt-8">
+      <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
         {activeTab === 'ecosystems' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
+          <section className={`backdrop-blur-[40px] rounded-[24px] border shadow-[0_8px_32px_rgba(0,0,0,0.08)] p-8 transition-colors ${theme === 'dark'
+            ? 'bg-white/[0.08] border-white/10'
+            : 'bg-white/[0.15] border-white/20'
+            }`}>
+            <div className="flex items-center justify-between mb-8">
               <div>
-                <h2 className={`text-[24px] font-bold mb-1 transition-colors ${theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'}`}>Ecosystem Management</h2>
-                <p className={`text-[14px] transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'}`}>Add or remove ecosystems from the platform</p>
+                <h2 className={`text-[24px] font-bold mb-2 transition-colors ${theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
+                  }`}>Ecosystem Management</h2>
+                <p className={`text-[14px] transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
+                  }`}>Configure and curate technology ecosystems</p>
               </div>
               <button
                 onClick={() => setShowAddModal(true)}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-br from-[#c9983a] to-[#a67c2e] text-white rounded-[12px] font-semibold text-[14px]"
+                className="flex items-center gap-2 px-6 py-3 bg-gradient-to-br from-[#c9983a] to-[#a67c2e] text-white rounded-[16px] font-semibold text-[14px] shadow-lg hover:scale-105 transition-all"
               >
-                <Plus className="w-4 h-4" />
+                <Plus className="w-5 h-5" />
                 Add Ecosystem
               </button>
             </div>
@@ -422,45 +459,66 @@ export function AdminPage() {
             {isLoading ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
                 {[...Array(3)].map((_, i) => (
-                  <div key={i} className={`h-[200px] rounded-[16px] ${theme === 'dark' ? 'bg-white/5' : 'bg-black/5'}`} />
+                  <div key={i} className={`h-[220px] rounded-[20px] ${theme === 'dark' ? 'bg-white/5' : 'bg-black/5'}`} />
                 ))}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {ecosystems.map((eco) => (
-                  <div key={eco.id} className={`p-5 rounded-[16px] border transition-all ${theme === 'dark' ? 'bg-white/[0.04] border-white/10' : 'bg-white border-black/5'}`}>
+                  <div key={eco.id} className={`p-6 rounded-[20px] border transition-all hover:shadow-xl ${theme === 'dark' ? 'bg-white/[0.04] border-white/10' : 'bg-white border-black/5 shadow-sm'}`}>
                     <div className="flex justify-between items-start mb-4">
-                      <div className="w-10 h-10 rounded-[10px] bg-[#c9983a]/20 flex items-center justify-center text-[#c9983a] font-bold">
+                      <div className="w-12 h-12 rounded-[14px] bg-gradient-to-br from-[#c9983a] to-[#a67c2e] flex items-center justify-center text-white font-bold text-xl shadow-inner">
                         {eco.name.charAt(0)}
                       </div>
-                      <button onClick={() => confirmDelete(eco.id, eco.name)} className="text-red-500 hover:bg-red-500/10 p-2 rounded-[8px]">
-                        <Trash2 className="w-4 h-4" />
+                      <button onClick={() => confirmDelete(eco.id, eco.name)} className="text-red-500 hover:bg-red-500/10 p-2.5 rounded-[12px] transition-colors">
+                        <Trash2 className="w-5 h-5" />
                       </button>
                     </div>
-                    <h3 className={`font-bold text-[18px] mb-1 ${theme === 'dark' ? 'text-white' : 'text-[#2d2820]'}`}>{eco.name}</h3>
-                    <p className={`text-[13px] line-clamp-2 ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'}`}>{eco.description}</p>
+                    <h3 className={`font-bold text-[20px] mb-2 ${theme === 'dark' ? 'text-white' : 'text-[#2d2820]'}`}>{eco.name}</h3>
+                    <p className={`text-[14px] line-clamp-2 mb-4 ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'}`}>{eco.description}</p>
+                    <div className="flex items-center gap-4 text-[12px] font-medium">
+                      <span className={`px-2.5 py-1 rounded-full ${theme === 'dark' ? 'bg-white/10 text-[#d4d4d4]' : 'bg-black/5 text-[#7a6b5a]'}`}>{eco.project_count} Projects</span>
+                      <span className={`px-2.5 py-1 rounded-full ${theme === 'dark' ? 'bg-green-500/10 text-green-400' : 'bg-green-50 text-green-700'}`}>{eco.status}</span>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
-          </div>
+          </section>
         )}
 
         {activeTab === 'projects' && (
-          <div className="space-y-6">
-            <div>
-              <h2 className={`text-[24px] font-bold mb-1 transition-colors ${theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'}`}>Project Management</h2>
-              <p className={`text-[14px] transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'}`}>Manage all projects registered on the platform</p>
+          <section className={`backdrop-blur-[40px] rounded-[24px] border shadow-[0_8px_32px_rgba(0,0,0,0.08)] p-8 transition-colors ${theme === 'dark'
+            ? 'bg-white/[0.08] border-white/10'
+            : 'bg-white/[0.15] border-white/20'
+            }`}>
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h2 className={`text-[24px] font-bold mb-2 transition-colors ${theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
+                  }`}>Project Management</h2>
+                <p className={`text-[14px] transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
+                  }`}>Review and manage all repositories registered on Grainlify</p>
+              </div>
+              <button
+                onClick={() => setShowAddProjectModal(true)}
+                className="flex items-center gap-2 px-6 py-3 bg-gradient-to-br from-[#c9983a] to-[#a67c2e] text-white rounded-[16px] font-semibold text-[14px] shadow-lg hover:scale-105 transition-all"
+              >
+                <Plus className="w-5 h-5" />
+                Add Project
+              </button>
             </div>
 
             {isAdminProjectsLoading ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 animate-pulse">
                 {[...Array(4)].map((_, i) => (
-                  <div key={i} className={`h-[300px] rounded-[18px] ${theme === 'dark' ? 'bg-white/5' : 'bg-black/5'}`} />
+                  <div key={i} className={`h-[320px] rounded-[20px] ${theme === 'dark' ? 'bg-white/5' : 'bg-black/5'}`} />
                 ))}
               </div>
             ) : adminProjects.length === 0 ? (
-              <div className="text-center py-20 opacity-50">No projects found.</div>
+              <div className={`text-center py-20 rounded-[20px] border-2 border-dashed ${theme === 'dark' ? 'border-white/10 text-[#7a6b5a]' : 'border-black/5 text-[#7a6b5a]'}`}>
+                <Package className="w-12 h-12 mx-auto mb-4 opacity-20" />
+                <p className="font-medium text-[16px]">No projects have been added yet.</p>
+              </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                 {adminProjects.map((project) => (
@@ -473,104 +531,143 @@ export function AdminPage() {
                 ))}
               </div>
             )}
-          </div>
+          </section>
         )}
 
-        {activeTab === 'osw' && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between">
+        {activeTab === 'events' && (
+          <section className={`backdrop-blur-[40px] rounded-[24px] border shadow-[0_8px_32px_rgba(0,0,0,0.08)] p-8 transition-colors ${theme === 'dark'
+            ? 'bg-white/[0.08] border-white/10'
+            : 'bg-white/[0.15] border-white/20'
+            }`}>
+            <div className="flex items-center justify-between mb-8">
               <div>
-                <h2 className={`text-[24px] font-bold mb-1 transition-colors ${theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'}`}>OSW Events</h2>
-                <p className={`text-[14px] transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'}`}>Manage Open-Source Week events</p>
+                <h2 className={`text-[24px] font-bold mb-2 transition-colors ${theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
+                  }`}>OSW Events</h2>
+                <p className={`text-[14px] transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
+                  }`}>Manage upcoming Open-Source Week events</p>
               </div>
               <button
                 onClick={() => setShowAddOswModal(true)}
-                className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-br from-[#c9983a] to-[#a67c2e] text-white rounded-[12px] font-semibold text-[14px]"
+                className="flex items-center gap-2 px-6 py-3 bg-gradient-to-br from-[#c9983a] to-[#a67c2e] text-white rounded-[16px] font-semibold text-[14px] shadow-lg hover:scale-105 transition-all"
               >
-                <Plus className="w-4 h-4" />
-                Add Event
+                <Calendar className="w-5 h-5" />
+                Create Event
               </button>
             </div>
 
             {isOswLoading ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-pulse">
                 {[...Array(3)].map((_, i) => (
-                  <div key={i} className={`h-[150px] rounded-[16px] ${theme === 'dark' ? 'bg-white/5' : 'bg-black/5'}`} />
+                  <div key={i} className={`h-[180px] rounded-[20px] ${theme === 'dark' ? 'bg-white/5' : 'bg-black/5'}`} />
                 ))}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {oswEvents.map((ev) => (
-                  <div key={ev.id} className={`p-5 rounded-[16px] border ${theme === 'dark' ? 'bg-white/[0.04] border-white/10' : 'bg-white border-black/5'}`}>
-                    <div className="flex justify-between items-start mb-2">
-                      <h3 className={`font-bold ${theme === 'dark' ? 'text-white' : 'text-[#2d2820]'}`}>{ev.title}</h3>
-                      <button onClick={() => confirmDeleteOsw(ev.id, ev.title)} className="text-red-500 hover:bg-red-500/10 p-2 rounded-[8px]">
-                        <Trash2 className="w-4 h-4" />
+                  <div key={ev.id} className={`p-6 rounded-[20px] border relative ${theme === 'dark' ? 'bg-white/[0.04] border-white/10' : 'bg-white border-black/5'}`}>
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h3 className={`font-bold text-[18px] ${theme === 'dark' ? 'text-white' : 'text-[#2d2820]'}`}>{ev.title}</h3>
+                        <p className={`text-[13px] font-medium mt-1 ${theme === 'dark' ? 'text-[#c9983a]' : 'text-[#a67c2e]'}`}>{new Date(ev.start_at).toLocaleDateString()} - {new Date(ev.end_at).toLocaleDateString()}</p>
+                      </div>
+                      <button onClick={() => confirmDeleteOsw(ev.id, ev.title)} className="text-red-500 hover:bg-red-500/10 p-2.5 rounded-[12px] transition-colors">
+                        <Trash2 className="w-5 h-5" />
                       </button>
                     </div>
-                    <p className={`text-[12px] mb-3 ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'}`}>{new Date(ev.start_at).toLocaleDateString()} - {new Date(ev.end_at).toLocaleDateString()}</p>
-                    <span className="px-2 py-0.5 rounded-full bg-[#c9983a]/20 text-[#c9983a] text-[10px] font-bold uppercase tracking-wider">{ev.status}</span>
+                    <div className="flex items-center gap-2 mt-4">
+                      <span className={`px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider ${theme === 'dark' ? 'bg-white/10 text-white' : 'bg-black/5 text-black'}`}>{ev.status}</span>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
-          </div>
+          </section>
         )}
       </div>
 
       {/* Modals */}
-      <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Add Ecosystem">
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <ModalInput label="Name" value={formData.name} onChange={(v) => setFormData({ ...formData, name: v })} required />
-          <ModalInput label="Description" value={formData.description} onChange={(v) => setFormData({ ...formData, description: v })} rows={3} />
-          <ModalInput label="Website URL" value={formData.websiteUrl} onChange={(v) => setFormData({ ...formData, websiteUrl: v })} />
+      <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} title="Add New Ecosystem">
+        <form onSubmit={handleSubmit} className="space-y-6">
+          <ModalInput label="Name" value={formData.name} onChange={(v) => setFormData({ ...formData, name: v })} placeholder="e.g. Web3, AI, Robotics" required />
+          <ModalInput label="Description" value={formData.description} onChange={(v) => setFormData({ ...formData, description: v })} placeholder="Global community for AI research..." rows={3} required />
+          <ModalInput label="Website URL" value={formData.websiteUrl} onChange={(v) => setFormData({ ...formData, websiteUrl: v })} placeholder="https://ecosystem.org" />
           <ModalFooter>
-             <ModalButton onClick={() => setShowAddModal(false)}>Cancel</ModalButton>
-             <ModalButton type="submit" variant="primary">Add Ecosystem</ModalButton>
+            <ModalButton onClick={() => setShowAddModal(false)}>Cancel</ModalButton>
+            <ModalButton type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? 'Creating...' : 'Create Ecosystem'}</ModalButton>
           </ModalFooter>
         </form>
       </Modal>
 
-      <Modal isOpen={showAddOswModal} onClose={() => setShowAddOswModal(false)} title="Add OSW Event">
-        <form onSubmit={handleCreateOsw} className="space-y-4">
-          <ModalInput label="Title" value={oswForm.title} onChange={(v) => setOswForm({ ...oswForm, title: v })} required />
+      <Modal isOpen={showAddOswModal} onClose={() => setShowAddOswModal(false)} title="Create OSW Event">
+        <form onSubmit={handleCreateOsw} className="space-y-6">
+          <ModalInput label="Title" value={oswForm.title} onChange={(v) => setOswForm({ ...oswForm, title: v })} placeholder="Open-Source Week 2026" required />
           <div className="grid grid-cols-2 gap-4">
             <ModalInput label="Start Date" type="date" value={oswForm.startDate} onChange={(v) => setOswForm({ ...oswForm, startDate: v })} required />
             <ModalInput label="End Date" type="date" value={oswForm.endDate} onChange={(v) => setOswForm({ ...oswForm, endDate: v })} required />
           </div>
           <ModalFooter>
-             <ModalButton onClick={() => setShowAddOswModal(false)}>Cancel</ModalButton>
-             <ModalButton type="submit" variant="primary">Create Event</ModalButton>
+            <ModalButton onClick={() => setShowAddOswModal(false)}>Cancel</ModalButton>
+            <ModalButton type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? 'Creating...' : 'Create Event'}</ModalButton>
           </ModalFooter>
         </form>
       </Modal>
 
-      <Modal isOpen={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Delete Ecosystem">
-        <div className="p-4">
-          <p>Are you sure you want to delete {deleteConfirm?.name}?</p>
+      <Modal isOpen={showAddProjectModal} onClose={() => setShowAddProjectModal(false)} title="Add New Project">
+        <form onSubmit={handleCreateProject} className="space-y-6">
+          <ModalInput
+            label="GitHub Repository"
+            value={projectFormData.github_full_name}
+            onChange={(v) => setProjectFormData({ ...projectFormData, github_full_name: v })}
+            placeholder="e.g. facebook/react"
+            required
+          />
+          <ModalSelect
+            label="Ecosystem"
+            value={projectFormData.ecosystem_name}
+            onChange={(v) => setProjectFormData({ ...projectFormData, ecosystem_name: v })}
+            options={ecosystems.map(e => ({ value: e.name, label: e.name }))}
+            required
+          />
+          <ModalInput
+            label="Primary Language"
+            value={projectFormData.language}
+            onChange={(v) => setProjectFormData({ ...projectFormData, language: v })}
+            placeholder="e.g. TypeScript, Rust, Go"
+          />
           <ModalFooter>
-            <ModalButton onClick={() => setDeleteConfirm(null)}>Cancel</ModalButton>
-            <ModalButton variant="primary" onClick={handleDeleteConfirmed}>Delete</ModalButton>
+            <ModalButton onClick={() => setShowAddProjectModal(false)}>Cancel</ModalButton>
+            <ModalButton type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? 'Adding...' : 'Add Project'}</ModalButton>
+          </ModalFooter>
+        </form>
+      </Modal>
+
+      {/* Confirmation Modals */}
+      <Modal isOpen={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Delete Ecosystem">
+        <div className="px-1 py-2">
+          <p className={`text-[15px] mb-6 ${theme === 'dark' ? 'text-white' : 'text-[#2d2820]'}`}>Are you sure you want to delete <span className="font-bold text-[#c9983a]">"{deleteConfirm?.name}"</span>? This action cannot be undone.</p>
+          <ModalFooter>
+            <ModalButton variant="secondary" onClick={() => setDeleteConfirm(null)}>Cancel</ModalButton>
+            <ModalButton variant="primary" onClick={handleDeleteConfirmed} disabled={!!deletingId}>{deletingId ? 'Deleting...' : 'Delete'}</ModalButton>
           </ModalFooter>
         </div>
       </Modal>
 
-      <Modal isOpen={!!projectDeleteConfirm} onClose={() => setProjectDeleteConfirm(null)} title="Delete Project">
-        <div className="p-4">
-          <p>Are you sure you want to delete {projectDeleteConfirm?.name}?</p>
+      <Modal isOpen={!!projectDeleteConfirm} onClose={() => setProjectDeleteConfirm(null)} title="Remove Project">
+        <div className="px-1 py-2">
+          <p className={`text-[15px] mb-6 ${theme === 'dark' ? 'text-white' : 'text-[#2d2820]'}`}>Are you sure you want to remove <span className="font-bold text-[#c9983a]">"{projectDeleteConfirm?.name}"</span> from the platform? This will stop all synchronization.</p>
           <ModalFooter>
-            <ModalButton onClick={() => setProjectDeleteConfirm(null)}>Cancel</ModalButton>
-            <ModalButton variant="primary" onClick={handleDeleteProjectConfirmed}>Delete Project</ModalButton>
+            <ModalButton variant="secondary" onClick={() => setProjectDeleteConfirm(null)}>Cancel</ModalButton>
+            <ModalButton variant="primary" onClick={handleDeleteProjectConfirmed} disabled={isDeletingProject}>{isDeletingProject ? 'Removing...' : 'Remove Project'}</ModalButton>
           </ModalFooter>
         </div>
       </Modal>
 
       <Modal isOpen={!!oswDeleteConfirm} onClose={() => setOswDeleteConfirm(null)} title="Delete Event">
-        <div className="p-4">
-          <p>Are you sure you want to delete {oswDeleteConfirm?.title}?</p>
+        <div className="px-1 py-2">
+          <p className={`text-[15px] mb-6 ${theme === 'dark' ? 'text-white' : 'text-[#2d2820]'}`}>Are you sure you want to delete <span className="font-bold text-[#c9983a]">"{oswDeleteConfirm?.title}"</span>?</p>
           <ModalFooter>
-            <ModalButton onClick={() => setOswDeleteConfirm(null)}>Cancel</ModalButton>
-            <ModalButton variant="primary" onClick={handleDeleteOswConfirmed}>Delete</ModalButton>
+            <ModalButton variant="secondary" onClick={() => setOswDeleteConfirm(null)}>Cancel</ModalButton>
+            <ModalButton variant="primary" onClick={handleDeleteOswConfirmed} disabled={!!oswDeletingId}>{oswDeletingId ? 'Deleting...' : 'Delete'}</ModalButton>
           </ModalFooter>
         </div>
       </Modal>
