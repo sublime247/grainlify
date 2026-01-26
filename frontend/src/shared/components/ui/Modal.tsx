@@ -125,7 +125,7 @@ interface ModalButtonProps {
   type?: 'button' | 'submit' | 'reset';
   variant?: 'primary' | 'secondary';
   className?: string;
-  disabled?: boolean;
+  disabled?: boolean; // ADDED
 }
 
 export function ModalButton({
@@ -134,7 +134,7 @@ export function ModalButton({
   type = 'button',
   variant = 'secondary',
   className = '',
-  disabled = false
+  disabled = false // ADDED
 }: ModalButtonProps) {
   const { theme } = useTheme();
 
@@ -144,7 +144,7 @@ export function ModalButton({
         type={type}
         onClick={onClick}
         disabled={disabled}
-        className={`px-4 md:px-5 py-2.5 rounded-[10px] md:rounded-[12px] bg-gradient-to-br from-[#c9983a] to-[#a67c2e] text-white font-medium text-[13px] md:text-[14px] shadow-[0_6px_20px_rgba(162,121,44,0.35)] hover:shadow-[0_8px_24px_rgba(162,121,44,0.5)] transition-all border border-white/10 hover:scale-[1.02] active:scale-100 flex items-center justify-center gap-2 touch-manipulation min-h-[44px] w-full sm:w-auto ${disabled ? 'opacity-50 cursor-not-allowed grayscale' : ''} ${className}`}
+        className={`px-4 md:px-5 py-2.5 rounded-[10px] md:rounded-[12px] bg-gradient-to-br from-[#c9983a] to-[#a67c2e] text-white font-medium text-[13px] md:text-[14px] shadow-[0_6px_20px_rgba(162,121,44,0.35)] hover:shadow-[0_8px_24px_rgba(162,121,44,0.5)] transition-all border border-white/10 hover:scale-[1.02] active:scale-100 flex items-center justify-center gap-2 touch-manipulation min-h-[44px] w-full sm:w-auto ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${className}`}
       >
         {children}
       </button>
@@ -156,10 +156,10 @@ export function ModalButton({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`px-4 md:px-5 py-2.5 rounded-[10px] md:rounded-[12px] backdrop-blur-[20px] border font-medium text-[13px] md:text-[14px] transition-all hover:scale-[1.02] active:scale-100 touch-manipulation min-h-[44px] w-full sm:w-auto ${theme === 'dark'
+      className={`px-4 md:px-5 py-2.5 rounded-[10px] md:rounded-[12px] backdrop-blur-[20px] border font-medium text-[13px] md:text-[14px] transition-all hover:scale-[1.02] active:scale-100 touch-manipulation min-h-[44px] w-full sm:w-auto ${disabled ? 'opacity-50 cursor-not-allowed' : ''} ${theme === 'dark'
         ? 'bg-white/[0.08] border-white/15 text-[#d4d4d4] hover:bg-white/[0.12] active:bg-white/[0.15]'
         : 'bg-white/[0.15] border-white/25 text-[#7a6b5a] hover:bg-white/[0.2] active:bg-white/[0.25]'
-        } ${disabled ? 'opacity-50 cursor-not-allowed grayscale' : ''} ${className}`}
+        } ${className}`}
     >
       {children}
     </button>
@@ -295,7 +295,6 @@ export function ModalSelect({
             ? 'bg-white/[0.08] border-white/15 text-[#f5f5f5] focus:border-[#c9983a]/30'
             : 'bg-white/[0.15] border-white/25 text-[#2d2820] focus:border-[#c9983a]/30'
           } ${isOpen ? 'border-[#c9983a]' : ''}`}
-
       >
         <span>{selectedOption ? selectedOption.label : 'Select...'}</span>
         <ChevronDown
@@ -303,11 +302,10 @@ export function ModalSelect({
         />
       </button>
 
-      {/* Custom Dropdown Menu - FINAL THEME FIX */}
       {isOpen && (
         <div
           className={`absolute z-[100] w-full mt-[80px] max-h-60 overflow-auto rounded-[14px] border shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-200 ${theme === 'dark'
-              ? 'bg-[#2d241d] border-[#c9983a]/20 shadow-black/40' // Dark Brown background + Gold border
+              ? 'bg-[#2d241d] border-[#c9983a]/20 shadow-black/40'
               : 'bg-[#ede3d0] border-[#c9983a]/60 shadow-amber-900/20'
             }`}
         >
@@ -321,8 +319,8 @@ export function ModalSelect({
                 }}
                 className={`px-4 py-2.5 cursor-pointer text-[14px] transition-colors flex items-center justify-between ${theme === 'dark'
                     ? value === option.value
-                      ? 'bg-[#c9983a]/20 text-[#c9983a] font-bold' // Dark mode active
-                      : 'text-[#e8dfd0] hover:bg-[#c9983a]/10'     // Dark mode hover (Cream text, gold bg)
+                      ? 'bg-[#c9983a]/20 text-[#c9983a] font-bold'
+                      : 'text-[#e8dfd0] hover:bg-[#c9983a]/10'
                     : value === option.value
                       ? 'bg-[#c9983a]/30 text-[#8b6b2d] font-bold'
                       : 'text-[#5c4d3c] hover:bg-[#c9983a]/20'

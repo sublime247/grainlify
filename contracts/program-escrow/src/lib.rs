@@ -1,4 +1,3 @@
-
 //! # Program Escrow Smart Contract
 //!
 //! A secure escrow system for managing hackathon and program prize pools on Stellar.
@@ -93,7 +92,7 @@
 //! let program_id = String::from_str(&env, "Hackathon2024");
 //! let backend = Address::from_string("GBACKEND...");
 //! let usdc_token = Address::from_string("CUSDC...");
-//! 
+//!
 //! let program = escrow_client.init_program(
 //!     &program_id,
 //!     &backend,
@@ -111,7 +110,7 @@
 //!     Address::from_string("GWINNER2..."),
 //!     Address::from_string("GWINNER3..."),
 //! ];
-//! 
+//!
 //! let prizes = vec![
 //!     &env,
 //!     5_000_0000000,  // 1st place: 5,000 USDC
@@ -141,10 +140,319 @@
 
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, vec, Address, Env, String, Symbol, Vec,
-    token,
+    contract, contractimpl, contracttype, symbol_short, token, vec, Address, Env, String, Symbol,
+    Vec,
 };
 
+// ==================== MONITORING MODULE ====================
+mod monitoring {
+    use soroban_sdk::{contracttype, symbol_short, Address, Env, String, Symbol};
+
+    // Storage keys
+    const OPERATION_COUNT: &str = "op_count";
+    const USER_COUNT: &str = "usr_count";
+    const ERROR_COUNT: &str = "err_count";
+
+    // Event: Operation metric
+    #[contracttype]
+    #[derive(Clone, Debug)]
+    pub struct OperationMetric {
+        pub operation: Symbol,
+        pub caller: Address,
+        pub timestamp: u64,
+        pub success: bool,
+    }
+
+    // Event: Performance metric
+    #[contracttype]
+    #[derive(Clone, Debug)]
+    pub struct PerformanceMetric {
+        pub function: Symbol,
+        pub duration: u64,
+        pub timestamp: u64,
+    }
+
+    // Data: Health status
+    #[contracttype]
+    #[derive(Clone, Debug)]
+    pub struct HealthStatus {
+        pub is_healthy: bool,
+        pub last_operation: u64,
+        pub total_operations: u64,
+        pub contract_version: String,
+    }
+
+    // Data: Analytics
+    #[contracttype]
+    #[derive(Clone, Debug)]
+    pub struct Analytics {
+        pub operation_count: u64,
+        pub unique_users: u64,
+        pub error_count: u64,
+        pub error_rate: u32,
+    }
+
+    // Data: State snapshot
+    #[contracttype]
+    #[derive(Clone, Debug)]
+    pub struct StateSnapshot {
+        pub timestamp: u64,
+        pub total_operations: u64,
+        pub total_users: u64,
+        pub total_errors: u64,
+    }
+
+    // Data: Performance stats
+    #[contracttype]
+    #[derive(Clone, Debug)]
+    pub struct PerformanceStats {
+        pub function_name: Symbol,
+        pub call_count: u64,
+        pub total_time: u64,
+        pub avg_time: u64,
+        pub last_called: u64,
+    }
+
+    // Track operation
+    pub fn track_operation(env: &Env, operation: Symbol, caller: Address, success: bool) {
+        let key = Symbol::new(env, OPERATION_COUNT);
+        let count: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+        env.storage().persistent().set(&key, &(count + 1));
+
+        if !success {
+            let err_key = Symbol::new(env, ERROR_COUNT);
+            let err_count: u64 = env.storage().persistent().get(&err_key).unwrap_or(0);
+            env.storage().persistent().set(&err_key, &(err_count + 1));
+        }
+
+        env.events().publish(
+            (symbol_short!("metric"), symbol_short!("op")),
+            OperationMetric {
+                operation,
+                caller,
+                timestamp: env.ledger().timestamp(),
+                success,
+            },
+        );
+    }
+
+    // Track performance
+    pub fn emit_performance(env: &Env, function: Symbol, duration: u64) {
+        let count_key = (Symbol::new(env, "perf_cnt"), function.clone());
+        let time_key = (Symbol::new(env, "perf_time"), function.clone());
+
+        let count: u64 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let total: u64 = env.storage().persistent().get(&time_key).unwrap_or(0);
+
+        env.storage().persistent().set(&count_key, &(count + 1));
+        env.storage()
+            .persistent()
+            .set(&time_key, &(total + duration));
+
+        env.events().publish(
+            (symbol_short!("metric"), symbol_short!("perf")),
+            PerformanceMetric {
+                function,
+                duration,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+    }
+
+    // Health check
+    pub fn health_check(env: &Env) -> HealthStatus {
+        let key = Symbol::new(env, OPERATION_COUNT);
+        let ops: u64 = env.storage().persistent().get(&key).unwrap_or(0);
+
+        HealthStatus {
+            is_healthy: true,
+            last_operation: env.ledger().timestamp(),
+            total_operations: ops,
+            contract_version: String::from_str(env, "1.0.0"),
+        }
+    }
+
+    // Get analytics
+    pub fn get_analytics(env: &Env) -> Analytics {
+        let op_key = Symbol::new(env, OPERATION_COUNT);
+        let usr_key = Symbol::new(env, USER_COUNT);
+        let err_key = Symbol::new(env, ERROR_COUNT);
+
+        let ops: u64 = env.storage().persistent().get(&op_key).unwrap_or(0);
+        let users: u64 = env.storage().persistent().get(&usr_key).unwrap_or(0);
+        let errors: u64 = env.storage().persistent().get(&err_key).unwrap_or(0);
+
+        let error_rate = if ops > 0 {
+            ((errors as u128 * 10000) / ops as u128) as u32
+        } else {
+            0
+        };
+
+        Analytics {
+            operation_count: ops,
+            unique_users: users,
+            error_count: errors,
+            error_rate,
+        }
+    }
+
+    // Get state snapshot
+    pub fn get_state_snapshot(env: &Env) -> StateSnapshot {
+        let op_key = Symbol::new(env, OPERATION_COUNT);
+        let usr_key = Symbol::new(env, USER_COUNT);
+        let err_key = Symbol::new(env, ERROR_COUNT);
+
+        StateSnapshot {
+            timestamp: env.ledger().timestamp(),
+            total_operations: env.storage().persistent().get(&op_key).unwrap_or(0),
+            total_users: env.storage().persistent().get(&usr_key).unwrap_or(0),
+            total_errors: env.storage().persistent().get(&err_key).unwrap_or(0),
+        }
+    }
+
+    // Get performance stats
+    pub fn get_performance_stats(env: &Env, function_name: Symbol) -> PerformanceStats {
+        let count_key = (Symbol::new(env, "perf_cnt"), function_name.clone());
+        let time_key = (Symbol::new(env, "perf_time"), function_name.clone());
+        let last_key = (Symbol::new(env, "perf_last"), function_name.clone());
+
+        let count: u64 = env.storage().persistent().get(&count_key).unwrap_or(0);
+        let total: u64 = env.storage().persistent().get(&time_key).unwrap_or(0);
+        let last: u64 = env.storage().persistent().get(&last_key).unwrap_or(0);
+
+        let avg = if count > 0 { total / count } else { 0 };
+
+        PerformanceStats {
+            function_name,
+            call_count: count,
+            total_time: total,
+            avg_time: avg,
+            last_called: last,
+        }
+    }
+}
+// ==================== END MONITORING MODULE ====================
+
+// ==================== ANTI-ABUSE MODULE ====================
+mod anti_abuse {
+    use soroban_sdk::{contracttype, symbol_short, Address, Env};
+
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct AntiAbuseConfig {
+        pub window_size: u64,      // Window size in seconds
+        pub max_operations: u32,   // Max operations allowed in window
+        pub cooldown_period: u64, // Minimum seconds between operations
+    }
+
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct AddressState {
+        pub last_operation_timestamp: u64,
+        pub window_start_timestamp: u64,
+        pub operation_count: u32,
+    }
+
+    #[contracttype]
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub enum AntiAbuseKey {
+        Config,
+        State(Address),
+        Whitelist(Address),
+        Admin,
+    }
+
+    pub fn get_config(env: &Env) -> AntiAbuseConfig {
+        env.storage()
+            .instance()
+            .get(&AntiAbuseKey::Config)
+            .unwrap_or(AntiAbuseConfig {
+                window_size: 3600, // 1 hour default
+                max_operations: 10,
+                cooldown_period: 60, // 1 minute default
+            })
+    }
+
+    pub fn set_config(env: &Env, config: AntiAbuseConfig) {
+        env.storage().instance().set(&AntiAbuseKey::Config, &config);
+    }
+
+    pub fn is_whitelisted(env: &Env, address: Address) -> bool {
+        env.storage()
+            .instance()
+            .has(&AntiAbuseKey::Whitelist(address))
+    }
+
+    pub fn set_whitelist(env: &Env, address: Address, whitelisted: bool) {
+        if whitelisted {
+            env.storage()
+                .instance()
+                .set(&AntiAbuseKey::Whitelist(address), &true);
+        } else {
+            env.storage()
+                .instance()
+                .remove(&AntiAbuseKey::Whitelist(address));
+        }
+    }
+
+    pub fn get_admin(env: &Env) -> Option<Address> {
+        env.storage().instance().get(&AntiAbuseKey::Admin)
+    }
+
+    pub fn set_admin(env: &Env, admin: Address) {
+        env.storage().instance().set(&AntiAbuseKey::Admin, &admin);
+    }
+
+    pub fn check_rate_limit(env: &Env, address: Address) {
+        if is_whitelisted(env, address.clone()) {
+            return;
+        }
+
+        let config = get_config(env);
+        let now = env.ledger().timestamp();
+        let key = AntiAbuseKey::State(address.clone());
+
+        let mut state: AddressState = env.storage().persistent().get(&key).unwrap_or(AddressState {
+            last_operation_timestamp: 0,
+            window_start_timestamp: now,
+            operation_count: 0,
+        });
+
+        // 1. Cooldown check
+        if state.last_operation_timestamp > 0
+            && now < state.last_operation_timestamp.saturating_add(config.cooldown_period)
+        {
+            env.events().publish(
+                (symbol_short!("abuse"), symbol_short!("cooldown")),
+                (address.clone(), now),
+            );
+            panic!("Operation in cooldown period");
+        }
+
+        // 2. Window check
+        if now >= state.window_start_timestamp.saturating_add(config.window_size) {
+            // New window
+            state.window_start_timestamp = now;
+            state.operation_count = 1;
+        } else {
+            // Same window
+            if state.operation_count >= config.max_operations {
+                env.events().publish(
+                    (symbol_short!("abuse"), symbol_short!("limit")),
+                    (address.clone(), now),
+                );
+                panic!("Rate limit exceeded");
+            }
+            state.operation_count += 1;
+        }
+
+        state.last_operation_timestamp = now;
+        env.storage().persistent().set(&key, &state);
+
+        // Extend TTL for state (approx 1 day)
+        env.storage().persistent().extend_ttl(&key, 17280, 17280);
+    }
+}
 
 // ============================================================================
 // Event Types
@@ -207,7 +515,6 @@ pub struct PayoutRecord {
     pub amount: i128,
     pub timestamp: u64,
 }
-
 
 /// Complete program state and configuration.
 ///
@@ -281,7 +588,6 @@ impl ProgramEscrowContract {
     // Program Registration & Initialization
     // ========================================================================
 
-
     /// Initializes a new program escrow for managing prize distributions.
     ///
     /// # Arguments
@@ -315,17 +621,17 @@ impl ProgramEscrowContract {
     /// # Example
     /// ```rust
     /// use soroban_sdk::{Address, String, Env};
-    /// 
+    ///
     /// let program_id = String::from_str(&env, "ETHGlobal2024");
     /// let backend = Address::from_string("GBACKEND...");
     /// let usdc = Address::from_string("CUSDC...");
-    /// 
+    ///
     /// let program = escrow_client.init_program(
     ///     &program_id,
     ///     &backend,
     ///     &usdc
     /// );
-    /// 
+    ///
     /// println!("Program created: {}", program.program_id);
     /// ```
     ///
@@ -349,21 +655,28 @@ impl ProgramEscrowContract {
     /// # Gas Cost
     /// Low - Initial storage writes
 
-    
     pub fn initialize_program(
         env: Env,
         program_id: String,
         authorized_payout_key: Address,
         token_address: Address,
     ) -> ProgramData {
+        // Apply rate limiting
+        anti_abuse::check_rate_limit(&env, authorized_payout_key.clone());
+
+        let start = env.ledger().timestamp();
+        let caller = authorized_payout_key.clone();
+
         // Validate program_id
         if program_id.len() == 0 {
+            monitoring::track_operation(&env, symbol_short!("init_prg"), caller, false);
             panic!("Program ID cannot be empty");
         }
 
         // Check if program already exists
         let program_key = DataKey::Program(program_id.clone());
         if env.storage().instance().has(&program_key) {
+            monitoring::track_operation(&env, symbol_short!("init_prg"), caller, false);
             panic!("Program already exists");
         }
 
@@ -394,6 +707,13 @@ impl ProgramEscrowContract {
             (PROGRAM_REGISTERED,),
             (program_id, authorized_payout_key, token_address, 0i128),
         );
+
+        // Track successful operation
+        monitoring::track_operation(&env, symbol_short!("init_prg"), caller, true);
+
+        // Track performance
+        let duration = env.ledger().timestamp().saturating_sub(start);
+        monitoring::emit_performance(&env, symbol_short!("init_prg"), duration);
 
         program_data
     }
@@ -429,7 +749,7 @@ impl ProgramEscrowContract {
         env.storage().instance().has(&program_key)
     }
 
-     // ========================================================================
+    // ========================================================================
     // Fund Management
     // ========================================================================
 
@@ -470,7 +790,7 @@ impl ProgramEscrowContract {
     /// # Example
     /// ```rust
     /// use soroban_sdk::token;
-    /// 
+    ///
     /// // 1. Transfer tokens to contract
     /// let amount = 10_000_0000000; // 10,000 USDC
     /// token_client.transfer(
@@ -478,7 +798,7 @@ impl ProgramEscrowContract {
     ///     &contract_address,
     ///     &amount
     /// );
-    /// 
+    ///
     /// // 2. Record the locked funds
     /// let updated = escrow_client.lock_program_funds(&amount);
     /// println!("Locked: {} USDC", amount / 10_000_000);
@@ -511,10 +831,17 @@ impl ProgramEscrowContract {
     /// - Forgetting to transfer tokens before calling
     /// -  Locking amount that exceeds actual contract balance
     /// -  Not verifying contract received the tokens
-   
+
     pub fn lock_program_funds(env: Env, program_id: String, amount: i128) -> ProgramData {
+        // Apply rate limiting
+        anti_abuse::check_rate_limit(&env, env.current_contract_address());
+
+        let start = env.ledger().timestamp();
+        let caller = env.current_contract_address();
+
         // Validate amount
         if amount <= 0 {
+            monitoring::track_operation(&env, symbol_short!("lock"), caller.clone(), false);
             panic!("Amount must be greater than zero");
         }
 
@@ -524,7 +851,10 @@ impl ProgramEscrowContract {
             .storage()
             .instance()
             .get(&program_key)
-            .unwrap_or_else(|| panic!("Program not found"));
+            .unwrap_or_else(|| {
+                monitoring::track_operation(&env, symbol_short!("lock"), caller.clone(), false);
+                panic!("Program not found")
+            });
 
         // Update balances
         program_data.total_funds += amount;
@@ -536,12 +866,15 @@ impl ProgramEscrowContract {
         // Emit event
         env.events().publish(
             (FUNDS_LOCKED,),
-            (
-                program_id,
-                amount,
-                program_data.remaining_balance,
-            ),
+            (program_id, amount, program_data.remaining_balance),
         );
+
+        // Track successful operation
+        monitoring::track_operation(&env, symbol_short!("lock"), caller, true);
+
+        // Track performance
+        let duration = env.ledger().timestamp().saturating_sub(start);
+        monitoring::emit_performance(&env, symbol_short!("lock"), duration);
 
         program_data
     }
@@ -597,7 +930,7 @@ impl ProgramEscrowContract {
     /// # Example
     /// ```rust
     /// use soroban_sdk::{vec, Address};
-    /// 
+    ///
     /// // Define winners and prizes
     /// let winners = vec![
     ///     &env,
@@ -605,14 +938,14 @@ impl ProgramEscrowContract {
     ///     Address::from_string("GWINNER2..."), // 2nd place
     ///     Address::from_string("GWINNER3..."), // 3rd place
     /// ];
-    /// 
+    ///
     /// let prizes = vec![
     ///     &env,
     ///     5_000_0000000,  // $5,000 USDC
     ///     3_000_0000000,  // $3,000 USDC
     ///     2_000_0000000,  // $2,000 USDC
     /// ];
-    /// 
+    ///
     /// // Execute batch payout (only authorized backend can call)
     /// let result = escrow_client.batch_payout(&winners, &prizes);
     /// println!("Paid {} winners", winners.len());
@@ -645,12 +978,15 @@ impl ProgramEscrowContract {
     /// - Maximum batch size limited by gas/resource limits
     /// - For very large batches, consider multiple calls
     /// - All amounts must be positive  
-      pub fn batch_payout(
+    pub fn batch_payout(
         env: Env,
         program_id: String,
         recipients: Vec<Address>,
         amounts: Vec<i128>,
     ) -> ProgramData {
+        // Apply rate limiting to the contract itself or the program
+        // We can't easily get the caller here without getting program data first
+        
         // Get program data
         let program_key = DataKey::Program(program_id.clone());
         let program_data: ProgramData = env
@@ -659,17 +995,20 @@ impl ProgramEscrowContract {
             .get(&program_key)
             .unwrap_or_else(|| panic!("Program not found"));
 
+        // Apply rate limiting to the authorized payout key
+        anti_abuse::check_rate_limit(&env, program_data.authorized_payout_key.clone());
+
         // Verify authorization - CRITICAL
         program_data.authorized_payout_key.require_auth();
 
-    // Validate inputs
-    if recipients.len() != amounts.len() {
-        panic!("Recipients and amounts vectors must have the same length");
-    }
+        // Validate inputs
+        if recipients.len() != amounts.len() {
+            panic!("Recipients and amounts vectors must have the same length");
+        }
 
-    if recipients.is_empty() {
-        panic!("Cannot process empty batch");
-    }
+        if recipients.is_empty() {
+            panic!("Cannot process empty batch");
+        }
 
         // Calculate total with overflow protection
         let mut total_payout: i128 = 0;
@@ -770,10 +1109,10 @@ impl ProgramEscrowContract {
     /// # Example
     /// ```rust
     /// use soroban_sdk::Address;
-    /// 
+    ///
     /// let winner = Address::from_string("GWINNER...");
     /// let prize = 1_000_0000000; // $1,000 USDC
-    /// 
+    ///
     /// // Execute single payout
     /// let result = escrow_client.single_payout(&winner, &prize);
     /// println!("Paid {} to winner", prize);
@@ -800,7 +1139,10 @@ impl ProgramEscrowContract {
             .get(&program_key)
             .unwrap_or_else(|| panic!("Program not found"));
 
-            program_data.authorized_payout_key.require_auth();
+        // Apply rate limiting to the authorized payout key
+        anti_abuse::check_rate_limit(&env, program_data.authorized_payout_key.clone());
+
+        program_data.authorized_payout_key.require_auth();
         // Verify authorization
         // let caller = env.invoker();
         // if caller != program_data.authorized_payout_key {
@@ -935,8 +1277,85 @@ impl ProgramEscrowContract {
             .instance()
             .get(&PROGRAM_REGISTRY)
             .unwrap_or(vec![&env]);
-        
+
         registry.len()
+    }
+
+    // ========================================================================
+    // Monitoring & Analytics Functions
+    // ========================================================================
+
+    /// Health check - returns contract health status
+    pub fn health_check(env: Env) -> monitoring::HealthStatus {
+        monitoring::health_check(&env)
+    }
+
+    /// Get analytics - returns usage analytics
+    pub fn get_analytics(env: Env) -> monitoring::Analytics {
+        monitoring::get_analytics(&env)
+    }
+
+    /// Get state snapshot - returns current state
+    pub fn get_state_snapshot(env: Env) -> monitoring::StateSnapshot {
+        monitoring::get_state_snapshot(&env)
+    }
+
+    /// Get performance stats for a function
+    pub fn get_performance_stats(env: Env, function_name: Symbol) -> monitoring::PerformanceStats {
+        monitoring::get_performance_stats(&env, function_name)
+    }
+
+    // ========================================================================
+    // Anti-Abuse Administrative Functions
+    // ========================================================================
+
+    /// Sets the administrative address for anti-abuse configuration.
+    /// Can only be called once or by the existing admin.
+    pub fn set_admin(env: Env, new_admin: Address) {
+        if let Some(current_admin) = anti_abuse::get_admin(&env) {
+            current_admin.require_auth();
+        }
+        anti_abuse::set_admin(&env, new_admin);
+    }
+
+    /// Updates the rate limit configuration.
+    /// Only the admin can call this.
+    pub fn update_rate_limit_config(
+        env: Env,
+        window_size: u64,
+        max_operations: u32,
+        cooldown_period: u64,
+    ) {
+        let admin = anti_abuse::get_admin(&env).expect("Admin not set");
+        admin.require_auth();
+
+        anti_abuse::set_config(
+            &env,
+            anti_abuse::AntiAbuseConfig {
+                window_size,
+                max_operations,
+                cooldown_period,
+            },
+        );
+    }
+
+    /// Adds or removes an address from the whitelist.
+    /// Only the admin can call this.
+    pub fn set_whitelist(env: Env, address: Address, whitelisted: bool) {
+        let admin = anti_abuse::get_admin(&env).expect("Admin not set");
+        admin.require_auth();
+
+        anti_abuse::set_whitelist(&env, address, whitelisted);
+    }
+
+    /// Checks if an address is whitelisted.
+    pub fn is_whitelisted(env: Env, address: Address) -> bool {
+        anti_abuse::is_whitelisted(&env, address)
+    }
+
+    /// Gets the current rate limit configuration.
+    pub fn get_rate_limit_config(env: Env) -> anti_abuse::AntiAbuseConfig {
+        anti_abuse::get_config(&env)
     }
 }
 
@@ -948,7 +1367,7 @@ impl ProgramEscrowContract {
 mod test {
     use super::*;
     use soroban_sdk::{
-        testutils::{Address as _, Ledger},
+        testutils::{Address as _},
         token, Address, Env, String,
     };
 
@@ -1184,7 +1603,6 @@ mod test {
     // Batch Payout Tests
     // ========================================================================
 
-    
     #[test]
     #[should_panic(expected = "Recipients and amounts vectors must have the same length")]
     fn test_batch_payout_mismatched_lengths() {
@@ -1231,8 +1649,6 @@ mod test {
         client.batch_payout(&prog_id, &recipients, &amounts);
     }
 
-  
-    
     #[test]
     fn test_program_count() {
         let env = Env::default();
@@ -1252,5 +1668,93 @@ mod test {
 
         client.initialize_program(&String::from_str(&env, "P3"), &backend, &token);
         assert_eq!(client.get_program_count(), 3);
+    }
+
+    // ========================================================================
+    // Anti-Abuse Tests
+    // ========================================================================
+
+    #[test]
+    #[should_panic(expected = "Operation in cooldown period")]
+    fn test_anti_abuse_cooldown_panic() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+        let contract_id = env.register_contract(None, ProgramEscrowContract);
+        let client = ProgramEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.set_admin(&admin);
+        client.update_rate_limit_config(&3600, &10, &60);
+
+        let backend = Address::generate(&env);
+        let token = Address::generate(&env);
+        
+        client.initialize_program(&String::from_str(&env, "P1"), &backend, &token);
+        
+        // Advance time by 30s (less than 60s cooldown)
+        env.ledger().with_mut(|li| li.timestamp += 30);
+        
+        client.initialize_program(&String::from_str(&env, "P2"), &backend, &token);
+    }
+
+    #[test]
+    #[should_panic(expected = "Rate limit exceeded")]
+    fn test_anti_abuse_limit_panic() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+        let contract_id = env.register_contract(None, ProgramEscrowContract);
+        let client = ProgramEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.set_admin(&admin);
+        client.update_rate_limit_config(&3600, &2, &0); // 2 ops max, no cooldown
+
+        let backend = Address::generate(&env);
+        let token = Address::generate(&env);
+        
+        client.initialize_program(&String::from_str(&env, "P1"), &backend, &token);
+        client.initialize_program(&String::from_str(&env, "P2"), &backend, &token);
+        client.initialize_program(&String::from_str(&env, "P3"), &backend, &token); // Should panic
+    }
+
+    #[test]
+    fn test_anti_abuse_whitelist() {
+        let env = Env::default();
+        env.mock_all_auths();
+        env.ledger().set_timestamp(1000);
+        let contract_id = env.register_contract(None, ProgramEscrowContract);
+        let client = ProgramEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.set_admin(&admin);
+        client.update_rate_limit_config(&3600, &1, &60); // 1 op max
+
+        let backend = Address::generate(&env);
+        let token = Address::generate(&env);
+        
+        client.set_whitelist(&backend, &true);
+        
+        client.initialize_program(&String::from_str(&env, "P1"), &backend, &token);
+        client.initialize_program(&String::from_str(&env, "P2"), &backend, &token); // Should work because whitelisted
+    }
+
+    #[test]
+    fn test_anti_abuse_config_update() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, ProgramEscrowContract);
+        let client = ProgramEscrowContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        client.set_admin(&admin);
+        
+        client.update_rate_limit_config(&7200, &5, &120);
+        
+        let config = client.get_rate_limit_config();
+        assert_eq!(config.window_size, 7200);
+        assert_eq!(config.max_operations, 5);
+        assert_eq!(config.cooldown_period, 120);
     }
 }
