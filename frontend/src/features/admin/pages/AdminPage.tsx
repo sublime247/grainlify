@@ -1,10 +1,56 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../../../shared/contexts/ThemeContext';
-import { Shield, Globe, Plus, Sparkles, Trash2, ExternalLink, Calendar, Pencil } from 'lucide-react';
+import { Shield, Plus, Trash2, Calendar, Package, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { Modal, ModalFooter, ModalButton, ModalInput, ModalSelect } from '../../../shared/components/ui/Modal';
 import { DatePicker } from '../../../shared/components/ui/DatePicker';
-import { createEcosystem, getAdminEcosystems, deleteEcosystem, updateEcosystem, createOpenSourceWeekEvent, getAdminOpenSourceWeekEvents, deleteOpenSourceWeekEvent } from '../../../shared/api/client';
+import {
+  createEcosystem,
+  getAdminEcosystems,
+  deleteEcosystem,
+  updateEcosystem,
+  createOpenSourceWeekEvent,
+  getAdminOpenSourceWeekEvents,
+  deleteOpenSourceWeekEvent,
+  getAdminProjects,
+  deleteAdminProject,
+  createProject,
+  verifyProject
+} from '../../../shared/api/client';
+import { ProjectCard, Project } from '../../dashboard/components/ProjectCard';
+
+// Helper functions (consistent with BrowsePage)
+const formatNumber = (num: number): string => {
+  if (num >= 1000000) return `${(num / 1000000).toFixed(1)}M`;
+  if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
+  return num.toString();
+};
+
+const getProjectIcon = (githubFullName: string): string => {
+  const [owner] = githubFullName.split('/');
+  return `https://github.com/${owner}.png?size=40`;
+};
+
+const getProjectColor = (name: string): string => {
+  const colors = [
+    'from-blue-500 to-cyan-500',
+    'from-purple-500 to-pink-500',
+    'from-green-500 to-emerald-500',
+    'from-red-500 to-pink-500',
+    'from-orange-500 to-red-500',
+    'from-gray-600 to-gray-800',
+    'from-green-600 to-green-800',
+    'from-cyan-500 to-blue-600',
+  ];
+  const hash = name.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  return colors[hash % colors.length];
+};
+
+const truncateDescription = (description: string | undefined | null, maxLength: number = 80): string => {
+  if (!description || description.trim() === '') return '';
+  const firstLine = description.split('\n')[0].trim();
+  return firstLine.length > maxLength ? firstLine.substring(0, maxLength).trim() + '...' : firstLine;
+};
 
 interface Ecosystem {
   id: string;
@@ -23,10 +69,12 @@ export function AdminPage() {
   const { theme } = useTheme();
   const [showAddModal, setShowAddModal] = useState(false);
   const [ecosystems, setEcosystems] = useState<Ecosystem[]>([]);
+  const [activeTab, setActiveTab] = useState<'ecosystems' | 'projects' | 'events'>('ecosystems');
   const [isLoading, setIsLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; name: string } | null>(null);
+
   const [editingEcosystem, setEditingEcosystem] = useState<Ecosystem | null>(null);
   const [editFormData, setEditFormData] = useState({
     name: '',
@@ -34,6 +82,7 @@ export function AdminPage() {
     status: 'active',
     websiteUrl: ''
   });
+
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -301,6 +350,7 @@ export function AdminPage() {
       await deleteOpenSourceWeekEvent(oswDeleteConfirm.id);
       await fetchOswEvents();
       setOswDeleteConfirm(null);
+      toast.success('Event deleted successfully');
     } catch (e) {
       setErrorMessage(e instanceof Error ? e.message : 'Failed to delete event.');
     } finally {
@@ -320,6 +370,7 @@ export function AdminPage() {
       await deleteAdminProject(projectDeleteConfirm.id);
       await fetchAdminProjects();
       setProjectDeleteConfirm(null);
+      toast.success('Project removed successfully');
     } catch (e) {
       setErrorMessage(e instanceof Error ? e.message : 'Failed to delete project.');
     } finally {
@@ -354,6 +405,7 @@ export function AdminPage() {
         category: 'other'
       });
       await fetchAdminProjects();
+      toast.success('Project added successfully');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to create project.';
       setErrorMessage(msg);
@@ -366,6 +418,7 @@ export function AdminPage() {
     try {
       await verifyProject(id);
       await fetchAdminProjects();
+      toast.success('Project verified successfully');
     } catch (e) {
       setErrorMessage(e instanceof Error ? e.message : 'Failed to verify project.');
     }
@@ -430,7 +483,6 @@ export function AdminPage() {
         end_at,
       });
 
-      // Success - close modal and reset form
       setShowAddOswModal(false);
       setOswErrors({});
       setOswForm({
@@ -444,8 +496,8 @@ export function AdminPage() {
         endTime: '00:00',
       });
 
-      // Refresh events list
       await fetchOswEvents();
+      toast.success('Event created successfully');
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to create event.');
     } finally {
@@ -505,6 +557,7 @@ export function AdminPage() {
       setFormData({ name: '', description: '', status: 'active', websiteUrl: '' });
       await fetchEcosystems();
       window.dispatchEvent(new CustomEvent('ecosystems-updated'));
+      toast.success('Ecosystem created successfully');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to create ecosystem.');
     } finally {
@@ -527,7 +580,6 @@ export function AdminPage() {
     e.preventDefault();
     if (!editingEcosystem) return;
 
-    // Validate all fields
     const nameError = validateName(editFormData.name);
     const descError = validateDescription(editFormData.description);
     const urlError = validateWebsiteUrl(editFormData.websiteUrl);
@@ -538,13 +590,9 @@ export function AdminPage() {
     if (urlError) newErrors.websiteUrl = urlError;
 
     setErrors(newErrors);
-
-    if (Object.keys(newErrors).length > 0) {
-      return;
-    }
+    if (Object.keys(newErrors).length > 0) return;
 
     setIsSubmitting(true);
-
     try {
       setErrorMessage(null);
       await updateEcosystem(editingEcosystem.id, {
@@ -554,25 +602,15 @@ export function AdminPage() {
         status: editFormData.status as 'active' | 'inactive',
       });
 
-      // Success - close modal and reset form
       setEditingEcosystem(null);
       setErrors({});
-      setEditFormData({
-        name: '',
-        description: '',
-        status: 'active',
-        websiteUrl: ''
-      });
-
-      toast.success('Ecosystem updated successfully');
-
-      // Refresh ecosystems list
+      setEditFormData({ name: '', description: '', status: 'active', websiteUrl: '' });
       await fetchEcosystems();
-      // Dispatch event to update other pages
       window.dispatchEvent(new CustomEvent('ecosystems-updated'));
+      toast.success('Ecosystem updated successfully');
     } catch (error) {
       console.error('Failed to update ecosystem:', error);
-      const msg = error instanceof Error ? error.message : 'Failed to update ecosystem. Please try again.';
+      const msg = error instanceof Error ? error.message : 'Failed to update ecosystem.';
       setErrorMessage(msg);
       toast.error(msg);
     } finally {
@@ -688,7 +726,7 @@ export function AdminPage() {
                       </div>
                       <div className="flex items-center gap-1">
                         <button
-                          onClick={() => openEditModal(ecosystem)}
+                          onClick={() => openEditModal(eco)}
                           className={`p-2 rounded-[10px] transition-all ${theme === 'dark'
                             ? 'hover:bg-amber-500/20 text-amber-400'
                             : 'hover:bg-amber-500/30 text-amber-600'
@@ -698,13 +736,10 @@ export function AdminPage() {
                           <Pencil className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => confirmDelete(ecosystem.id, ecosystem.name)}
-                          disabled={deletingId === ecosystem.id}
-                          className={`p-2 rounded-[10px] transition-all ${deletingId === ecosystem.id
-                            ? 'opacity-50 cursor-not-allowed'
-                            : theme === 'dark'
-                              ? 'hover:bg-red-500/20 text-red-400'
-                              : 'hover:bg-red-500/30 text-red-600'
+                          onClick={() => confirmDelete(eco.id, eco.name)}
+                          className={`p-2 rounded-[10px] transition-all ${theme === 'dark'
+                            ? 'hover:bg-red-500/20 text-red-400'
+                            : 'hover:bg-red-500/30 text-red-600'
                             }`}
                           title="Delete ecosystem"
                         >
@@ -780,15 +815,16 @@ export function AdminPage() {
             ? 'bg-white/[0.08] border-white/10'
             : 'bg-white/[0.15] border-white/20'
             }`}>
-            No Open-Source Week events yet. Create one (e.g. Feb 21–Feb 28) using "Add Event".
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {oswEvents.map((ev) => (
-              <div
-                key={ev.id}
-                className={`backdrop-blur-[30px] rounded-[16px] border p-5 ${theme === 'dark' ? 'bg-white/[0.06] border-white/10' : 'bg-white/[0.12] border-white/20'
-                  }`}
+            <div className="flex items-center justify-between mb-8">
+              <div>
+                <h2 className={`text-[24px] font-bold mb-2 transition-colors ${theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
+                  }`}>OSW Events</h2>
+                <p className={`text-[14px] transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
+                  }`}>Manage upcoming Open-Source Week events</p>
+              </div>
+              <button
+                onClick={() => setShowAddOswModal(true)}
+                className="flex items-center gap-2 px-6 py-3 bg-gradient-to-br from-[#c9983a] to-[#a67c2e] text-white rounded-[16px] font-semibold text-[14px] shadow-lg hover:scale-105 transition-all"
               >
                 <Calendar className="w-5 h-5" />
                 Create Event
@@ -838,21 +874,147 @@ export function AdminPage() {
         </form>
       </Modal>
 
-      <Modal isOpen={showAddOswModal} onClose={() => setShowAddOswModal(false)} title="Create OSW Event">
-        <form onSubmit={handleCreateOsw} className="space-y-6">
-          <ModalInput label="Title" value={oswForm.title} onChange={(v) => setOswForm({ ...oswForm, title: v })} placeholder="Open-Source Week 2026" required />
-          <div className="grid grid-cols-2 gap-4">
-            <ModalInput label="Start Date" type="date" value={oswForm.startDate} onChange={(v) => setOswForm({ ...oswForm, startDate: v })} required />
-            <ModalInput label="End Date" type="date" value={oswForm.endDate} onChange={(v) => setOswForm({ ...oswForm, endDate: v })} required />
+      <Modal
+        isOpen={showAddOswModal}
+        onClose={() => {
+          setShowAddOswModal(false);
+          setOswErrors({});
+        }}
+        title="Add Open-Source Week Event"
+        icon={<Calendar className="w-6 h-6 text-[#c9983a]" />}
+        width="lg"
+      >
+        <p className={`text-[14px] mb-6 transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
+          }`}>Create a new Open-Source Week event</p>
+
+        <form onSubmit={handleCreateOsw}>
+          <div className="space-y-4">
+            <ModalInput
+              label="Title"
+              value={oswForm.title}
+              onChange={(value) => {
+                setOswForm({ ...oswForm, title: value });
+                if (oswErrors.title) setOswErrors({ ...oswErrors, title: '' });
+              }}
+              onBlur={() => {
+                const error = validateOswTitle(oswForm.title);
+                if (error) setOswErrors(prev => ({ ...prev, title: error }));
+              }}
+              placeholder="Open-Source Week"
+              required
+              error={oswErrors.title}
+            />
+
+            <ModalInput
+              label="Description"
+              value={oswForm.description}
+              onChange={(value) => {
+                setOswForm({ ...oswForm, description: value });
+                if (oswErrors.description) setOswErrors({ ...oswErrors, description: '' });
+              }}
+              onBlur={() => {
+                const error = validateOswDescription(oswForm.description);
+                if (error) setOswErrors(prev => ({ ...prev, description: error }));
+              }}
+              placeholder="Describe the event..."
+              rows={3}
+              error={oswErrors.description}
+            />
+
+            <ModalInput
+              label="Location"
+              value={oswForm.location}
+              onChange={(value) => {
+                setOswForm({ ...oswForm, location: value });
+                if (oswErrors.location) setOswErrors({ ...oswErrors, location: '' });
+              }}
+              onBlur={() => {
+                const error = validateOswLocation(oswForm.location);
+                if (error) setOswErrors(prev => ({ ...prev, location: error }));
+              }}
+              placeholder="Worldwide"
+              error={oswErrors.location}
+            />
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <DatePicker
+                label="Start date (UTC)"
+                value={oswForm.startDate}
+                onChange={(value) => {
+                  setOswForm({ ...oswForm, startDate: value });
+                  if (oswErrors.startDate) setOswErrors({ ...oswErrors, startDate: '' });
+                }}
+                placeholder="Select start date"
+                required
+                error={oswErrors.startDate}
+              />
+              <ModalInput
+                label="Start time (UTC)"
+                type="time"
+                value={oswForm.startTime}
+                onChange={(value) => {
+                  setOswForm({ ...oswForm, startTime: value });
+                  if (oswErrors.startTime) setOswErrors({ ...oswErrors, startTime: '' });
+                }}
+                onBlur={() => {
+                  const error = validateOswStartTime(oswForm.startTime);
+                  if (error) setOswErrors(prev => ({ ...prev, startTime: error }));
+                }}
+                required
+                error={oswErrors.startTime}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <DatePicker
+                label="End date (UTC)"
+                value={oswForm.endDate}
+                onChange={(value) => {
+                  setOswForm({ ...oswForm, endDate: value });
+                  if (oswErrors.endDate) setOswErrors({ ...oswErrors, endDate: '' });
+                }}
+                placeholder="Select end date"
+                required
+                error={oswErrors.endDate}
+              />
+              <ModalInput
+                label="End time (UTC)"
+                type="time"
+                value={oswForm.endTime}
+                onChange={(value) => {
+                  setOswForm({ ...oswForm, endTime: value });
+                  if (oswErrors.endTime) setOswErrors({ ...oswErrors, endTime: '' });
+                }}
+                onBlur={() => {
+                  const error = validateOswEndTime(
+                    oswForm.endTime,
+                    oswForm.startTime,
+                    oswForm.endDate,
+                    oswForm.startDate
+                  );
+                  if (error) setOswErrors(prev => ({ ...prev, endTime: error }));
+                }}
+                required
+                error={oswErrors.endTime}
+              />
+            </div>
           </div>
+
           <ModalFooter>
-            <ModalButton onClick={() => setShowAddOswModal(false)}>Cancel</ModalButton>
-            <ModalButton type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? 'Creating...' : 'Create Event'}</ModalButton>
+            <ModalButton onClick={() => {
+              setShowAddOswModal(false);
+              setOswErrors({});
+            }}>
+              Cancel
+            </ModalButton>
+            <ModalButton type="submit" variant="primary" disabled={isSubmitting}>
+              <Plus className="w-4 h-4" />
+              {isSubmitting ? 'Creating...' : 'Create Event'}
+            </ModalButton>
           </ModalFooter>
         </form>
       </Modal>
 
-      {/* Edit Ecosystem Modal */}
       <Modal
         isOpen={!!editingEcosystem}
         onClose={() => setEditingEcosystem(null)}
@@ -935,69 +1097,23 @@ export function AdminPage() {
         </form>
       </Modal>
 
-      {/* Add Open Source Week Event Modal */}
-      <Modal
-        isOpen={showAddOswModal}
-        onClose={() => {
-          setShowAddOswModal(false);
-          setOswErrors({});
-        }}
-        title="Add Open-Source Week Event"
-        icon={<Calendar className="w-6 h-6 text-[#c9983a]" />}
-        width="lg"
-      >
-        <p className={`text-[14px] mb-6 transition-colors ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
-          }`}>Create a new Open-Source Week event</p>
-
-        <form onSubmit={handleCreateOsw}>
-          <div className="space-y-4">
-            <ModalInput
-              label="Title"
-              value={oswForm.title}
-              onChange={(value) => {
-                setOswForm({ ...oswForm, title: value });
-                if (oswErrors.title) setOswErrors({ ...oswErrors, title: '' });
-              }}
-              onBlur={() => {
-                const error = validateOswTitle(oswForm.title);
-                if (error) setOswErrors(prev => ({ ...prev, title: error }));
-              }}
-              placeholder="Open-Source Week"
-              required
-              error={oswErrors.title}
-            />
-
-            <ModalInput
-              label="Description"
-              value={oswForm.description}
-              onChange={(value) => {
-                setOswForm({ ...oswForm, description: value });
-                if (oswErrors.description) setOswErrors({ ...oswErrors, description: '' });
-              }}
-              onBlur={() => {
-                const error = validateOswDescription(oswForm.description);
-                if (error) setOswErrors(prev => ({ ...prev, description: error }));
-              }}
-              placeholder="Describe the event..."
-              rows={3}
-              error={oswErrors.description}
-            />
-
-            <ModalInput
-              label="Location"
-              value={oswForm.location}
-              onChange={(value) => {
-                setOswForm({ ...oswForm, location: value });
-                if (oswErrors.location) setOswErrors({ ...oswErrors, location: '' });
-              }}
-              onBlur={() => {
-                const error = validateOswLocation(oswForm.location);
-                if (error) setOswErrors(prev => ({ ...prev, location: error }));
-              }}
-              placeholder="Worldwide"
-              error={oswErrors.location}
-            />
-
+      <Modal isOpen={showAddProjectModal} onClose={() => setShowAddProjectModal(false)} title="Add New Project">
+        <form onSubmit={handleCreateProject} className="space-y-6">
+          <ModalInput
+            label="GitHub Repository"
+            value={projectFormData.github_full_name}
+            onChange={(v) => setProjectFormData({ ...projectFormData, github_full_name: v })}
+            placeholder="e.g. facebook/react"
+            required
+          />
+          <ModalSelect
+            label="Ecosystem"
+            value={projectFormData.ecosystem_name}
+            onChange={(v) => setProjectFormData({ ...projectFormData, ecosystem_name: v })}
+            options={ecosystems.map(e => ({ value: e.name, label: e.name }))}
+            required
+          />
+          <div className="grid grid-cols-2 gap-4">
             <ModalSelect
               label="Category"
               value={projectFormData.category}
@@ -1019,85 +1135,20 @@ export function AdminPage() {
               onChange={(v) => setProjectFormData({ ...projectFormData, language: v })}
               placeholder="e.g. TypeScript, Rust"
             />
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <DatePicker
-                label="Start date (UTC)"
-                value={oswForm.startDate}
-                onChange={(value) => {
-                  setOswForm({ ...oswForm, startDate: value });
-                  if (oswErrors.startDate) setOswErrors({ ...oswErrors, startDate: '' });
-                }}
-                placeholder="Select start date"
-                required
-                error={oswErrors.startDate}
-              />
-              <ModalInput
-                label="Start time (UTC)"
-                type="time"
-                value={oswForm.startTime}
-                onChange={(value) => {
-                  setOswForm({ ...oswForm, startTime: value });
-                  if (oswErrors.startTime) setOswErrors({ ...oswErrors, startTime: '' });
-                }}
-                onBlur={() => {
-                  const error = validateOswStartTime(oswForm.startTime);
-                  if (error) setOswErrors(prev => ({ ...prev, startTime: error }));
-                }}
-                required
-                error={oswErrors.startTime}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <DatePicker
-                label="End date (UTC)"
-                value={oswForm.endDate}
-                onChange={(value) => {
-                  setOswForm({ ...oswForm, endDate: value });
-                  if (oswErrors.endDate) setOswErrors({ ...oswErrors, endDate: '' });
-                }}
-                placeholder="Select end date"
-                required
-                error={oswErrors.endDate}
-              />
-              <ModalInput
-                label="End time (UTC)"
-                type="time"
-                value={oswForm.endTime}
-                onChange={(value) => {
-                  setOswForm({ ...oswForm, endTime: value });
-                  if (oswErrors.endTime) setOswErrors({ ...oswErrors, endTime: '' });
-                }}
-                onBlur={() => {
-                  const error = validateOswEndTime(
-                    oswForm.endTime,
-                    oswForm.startTime,
-                    oswForm.endDate,
-                    oswForm.startDate
-                  );
-                  if (error) setOswErrors(prev => ({ ...prev, endTime: error }));
-                }}
-                required
-                error={oswErrors.endTime}
-              />
-            </div>
           </div>
-
+          <ModalInput
+            label="Tags (comma separated)"
+            value={projectFormData.tags}
+            onChange={(v) => setProjectFormData({ ...projectFormData, tags: v })}
+            placeholder="e.g. react, web3, wallet"
+          />
           <ModalFooter>
-            <ModalButton onClick={() => {
-              setShowAddOswModal(false);
-              setOswErrors({});
-            }}>
-              Cancel
-            </ModalButton>
-            <ModalButton type="submit" variant="primary" disabled={isSubmitting}>
-              <Plus className="w-4 h-4" />
-              {isSubmitting ? 'Creating...' : 'Create Event'}
-            </ModalButton>
+            <ModalButton onClick={() => setShowAddProjectModal(false)}>Cancel</ModalButton>
+            <ModalButton type="submit" variant="primary" disabled={isSubmitting}>{isSubmitting ? 'Adding...' : 'Add Project'}</ModalButton>
           </ModalFooter>
         </form>
       </Modal>
+
       {/* Confirmation Modals */}
       <Modal isOpen={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="Delete Ecosystem">
         <div className="px-1 py-2">

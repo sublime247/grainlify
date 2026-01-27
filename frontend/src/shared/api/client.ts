@@ -615,12 +615,15 @@ export const deleteEcosystem = (id: string) =>
     method: "DELETE",
   });
 
-export const updateEcosystem = (id: string, data: {
-  name: string;
-  description?: string;
-  website_url?: string;
-  status: 'active' | 'inactive';
-}) =>
+export const updateEcosystem = (
+  id: string,
+  data: {
+    name: string;
+    description?: string;
+    website_url?: string;
+    status: "active" | "inactive";
+  },
+) =>
   apiRequest<{
     id: string;
     slug: string;
@@ -634,7 +637,7 @@ export const updateEcosystem = (id: string, data: {
     updated_at: string;
   }>(`/admin/ecosystems/${id}`, {
     requiresAuth: true,
-    method: 'PUT',
+    method: "PUT",
     body: JSON.stringify(data),
   });
 
