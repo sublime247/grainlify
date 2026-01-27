@@ -10,7 +10,7 @@ fn create_token_contract<'a>(
     e: &Env,
     admin: &Address,
 ) -> (token::Client<'a>, token::StellarAssetClient<'a>) {
-    let contract_address = e.register_stellar_asset_contract(admin.clone());
+    let contract_address = e.register_stellar_asset_contract_v2(admin.clone()).address();
     (
         token::Client::new(e, &contract_address),
         token::StellarAssetClient::new(e, &contract_address),
@@ -211,7 +211,6 @@ fn test_refund_full_after_deadline() {
 
     // Initial balances
     let initial_depositor_balance = setup.token.balance(&setup.depositor);
-    let initial_contract_balance = setup.token.balance(&setup.escrow_address);
 
     // Full refund (no amount/recipient specified, mode = Full)
     setup.escrow.refund(
@@ -591,7 +590,7 @@ fn test_refund_history_tracking() {
     let total_amount = 1000;
     let refund1 = 200;
     let refund2 = 300;
-    let refund3 = 400;
+    let _refund3 = 400;
     let current_time = setup.env.ledger().timestamp();
     let deadline = current_time + 1000;
 
