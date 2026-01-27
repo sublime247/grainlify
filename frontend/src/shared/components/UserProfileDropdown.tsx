@@ -72,7 +72,9 @@ export function UserProfileDropdown({ onPageChange,showMobileNav }: UserProfileD
         <button
           className={`h-[46px] px-4 rounded-[999px] overflow-clip relative flex items-center gap-2 backdrop-blur-[40px] transition-all hover:scale-105 shadow-[0px_6px_6.5px_-1px_rgba(0,0,0,0.36),0px_0px_4.2px_0px_rgba(0,0,0,0.69)] mr-[3px] ${
             darkTheme ? 'bg-[#2d2820]' : 'bg-[#d4c5b0]'
-          }`}
+          }
+          ${showMobileNav ? " flex " : " hidden lg:flex "}
+          `}
         >
           <div className={`absolute inset-0 pointer-events-none rounded-full ${
             darkTheme

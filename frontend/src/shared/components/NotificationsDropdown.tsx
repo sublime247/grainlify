@@ -51,7 +51,7 @@ export function NotificationsDropdown({showMobileNav}:NotificationsDropdownProp)
           ${showMobileNav ? "flex w-[80%] max-w-[800px] rounded-sm" : "hidden lg:flex"}`}
         >
           <div
-            className={`absolute inset-0 pointer-events-none rounded-full ${
+            className={`absolute inset-0 pointer-events-none ${showMobileNav? 'rounded-sm': 'rounded-full'} ${
               darkTheme
                 ? "shadow-[inset_1px_-1px_1px_0px_rgba(0,0,0,0.5),inset_-2px_2px_1px_-1px_rgba(255,255,255,0.11)]"
                 : "shadow-[inset_1px_-1px_1px_0px_rgba(0,0,0,0.15),inset_-2px_2px_1px_-1px_rgba(255,255,255,0.35)]"

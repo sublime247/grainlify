@@ -591,7 +591,7 @@ export function Dashboard() {
               className={`h-[46px] lg:w-[46px]  overflow-clip relative items-center justify-center backdrop-blur-[40px] transition-all hover:scale-105 shadow-[0px_6px_6.5px_-1px_rgba(0,0,0,0.36),0px_0px_4.2px_0px_rgba(0,0,0,0.69)] ${
                 darkTheme ? "bg-[#2d2820] text-[#e8dfd0]" : "bg-[#d4c5b0] text-[#2d2820]"
               }
-              ${showMobileNav ? 'flex rounded-sm w-[80%] max-w-[800px] ' : 'hidden lg:flex rounded-full'}`}
+              ${showMobileNav ? ' flex rounded-sm w-[80%] max-w-[800px] ' : ' hidden lg:flex rounded-full '}`}
               title={darkTheme ? "Switch to light mode" : "Switch to dark mode"}
             >
               <div
@@ -618,7 +618,7 @@ export function Dashboard() {
                   }`}
                 />
               )}
-               <span className='ml-2'>
+               <span className='ml-2 lg:hidden'>
               {
 
                showMobileNav && darkTheme ?"Light Mode" :"Dark Mode"
