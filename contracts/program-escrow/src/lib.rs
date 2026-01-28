@@ -2316,7 +2316,7 @@ mod test {
     use super::*;
     use soroban_sdk::{
         testutils::{Address as _, Ledger},
-        token, Address, Env, String, Vec,
+        token, Address, Env, String,
     };
 
     // Test helper to create a mock token contract
@@ -2340,7 +2340,7 @@ mod test {
         release_timestamp: u64,
     ) {
         // Register program
-        client.initialize_program(program_id, token, authorized_key);
+        client.initialize_program(program_id, authorized_key, token);
         
         // Create and fund token
         let token_client = create_token_contract(env, authorized_key);
@@ -2356,7 +2356,7 @@ mod test {
             program_id,
             &total_amount,
             &release_timestamp,
-            winner.clone(),
+            &winner,
         );
     }
 
@@ -2420,7 +2420,7 @@ mod test {
         env.mock_all_auths();
         
         // Register program
-        client.initialize_program(&program_id, &token, &authorized_key);
+        client.initialize_program(&program_id, &authorized_key, &token);
         
         // Create and fund token
         let token_client = create_token_contract(&env, &authorized_key);
@@ -2591,7 +2591,7 @@ mod test {
         env.mock_all_auths();
         
         // Register program
-        client.initialize_program(&program_id, &token, &authorized_key);
+        client.initialize_program(&program_id, &authorized_key, &token);
         
         // Create and fund token
         let token_client = create_token_contract(&env, &authorized_key);
@@ -2675,7 +2675,7 @@ mod test {
         env.mock_all_auths();
         
         // Register program
-        client.initialize_program(&program_id, &token, &authorized_key);
+        client.initialize_program(&program_id, &authorized_key, &token);
         
         // Create and fund token
         let token_client = create_token_contract(&env, &authorized_key);
