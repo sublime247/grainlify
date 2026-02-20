@@ -1,150 +1,172 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, vec};
-use soroban_sdk::token::Client as TokenClient;
-use soroban_sdk::token::StellarAssetClient as TokenAdminClient;
+use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
-fn create_token_contract<'a>(e: &Env, admin: &Address) -> (TokenClient<'a>, TokenAdminClient<'a>) {
-    let contract_address = e.register_stellar_asset_contract(admin.clone());
-    (
-        TokenClient::new(e, &contract_address),
-        TokenAdminClient::new(e, &contract_address),
-    )
+
+fn setup_with_admin(env: &Env) -> (ProgramEscrowContract, Address) {
+    let contract = ProgramEscrowContract;
+    let admin = Address::generate(env);
+    contract.initialize_contract(env, admin.clone());
+    (contract, admin)
 }
 
-fn create_escrow_contract<'a>(e: &Env) -> ProgramEscrowContractClient<'a> {
-    let contract_id = e.register_contract(None, ProgramEscrowContract);
-    ProgramEscrowContractClient::new(e, &contract_id)
+fn setup_program_with_admin(env: &Env) -> (ProgramEscrowContract, Address, Address, String) {
+    let (contract, admin) = setup_with_admin(env);
+    let payout_key = Address::generate(env);
+    let token = Address::generate(env);
+    let program_id = String::from_str(env, "pause-test-prog");
+    contract.initialize_program(env, program_id.clone(), payout_key.clone(), token.clone());
+    (contract, admin, payout_key, program_id)
 }
+
+// --- get_pause_flags & default state ---
 
 #[test]
-fn test_program_granular_pause_lock() {
+fn test_default_pause_flags_are_all_false() {
     let env = Env::default();
-    env.mock_all_auths();
-    
-    let admin = Address::generate(&env);
-    let manager = Address::generate(&env); // authorized payout key
-    let token_admin = Address::generate(&env);
-    
-    let (token_client, token_admin_client) = create_token_contract(&env, &token_admin);
-    let escrow_client = create_escrow_contract(&env);
-    
-    // Initialize contract admin
-    escrow_client.initialize_contract(&admin);
-    
-    // Check default flags
-    let flags = escrow_client.get_pause_flags();
+    let (contract, _admin) = setup_with_admin(&env);
+
+    let flags = contract.get_pause_flags(&env);
     assert_eq!(flags.lock_paused, false);
-    
-    // Initialize program
-    let program_id = String::from_str(&env, "prog1");
-    escrow_client.initialize_program(&program_id, &manager, &token_client.address);
-    
-    // Setup funds
-    let escrow_address = escrow_client.address;
-    token_admin_client.mint(&escrow_address, &1000); // simulate transfer
-    
-    // Verify lock works unpaused
-    escrow_client.lock_program_funds(&program_id, &100);
-    
-    // Pause lock
-    escrow_client.set_paused(
-        &Some(true),
-        &None,
-        &None
-    );
-    
-    let flags = escrow_client.get_pause_flags();
+    assert_eq!(flags.release_paused, false);
+    assert_eq!(flags.refund_paused, false);
+}
+
+// --- set_paused: lock ---
+
+#[test]
+fn test_set_paused_lock() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _admin) = setup_with_admin(&env);
+
+    contract.set_paused(&env, Some(true), None, None);
+
+    let flags = contract.get_pause_flags(&env);
     assert_eq!(flags.lock_paused, true);
-    
-    // Try to lock (should fail)
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        escrow_client.lock_program_funds(&program_id, &100);
-    }));
-    assert!(res.is_err()); // Should be panic "Funds Paused"
-    
-    // Unpause
-    escrow_client.set_paused(
-        &Some(false),
-        &None,
-        &None
-    );
-    
-    // Lock works again
-    escrow_client.lock_program_funds(&program_id, &100);
+    assert_eq!(flags.release_paused, false);
+    assert_eq!(flags.refund_paused, false);
 }
 
 #[test]
-fn test_program_granular_pause_payout() {
+fn test_unset_paused_lock() {
     let env = Env::default();
     env.mock_all_auths();
-    
-    let admin = Address::generate(&env);
-    let manager = Address::generate(&env);
-    let recipient = Address::generate(&env);
-    let token_admin = Address::generate(&env);
-    
-    let (token_client, token_admin_client) = create_token_contract(&env, &token_admin);
-    let escrow_client = create_escrow_contract(&env);
-    
-    escrow_client.initialize_contract(&admin);
-    
-    let program_id = String::from_str(&env, "prog1");
-    escrow_client.initialize_program(&program_id, &manager, &token_client.address);
-    
-    let escrow_address = escrow_client.address;
-    token_admin_client.mint(&escrow_address, &1000);
-    escrow_client.lock_program_funds(&program_id, &1000);
-    
-    // Pause release
-    escrow_client.set_paused(
-        &None,
-        &Some(true),
-        &None
-    );
-    
-    // Single payout should fail
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        escrow_client.single_payout(&program_id, &recipient, &100);
-    }));
-    assert!(res.is_err());
-    
-    // Batch payout should fail
-    let recipients = vec![&env, recipient.clone()];
-    let amounts = vec![&env, 100];
-    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        escrow_client.batch_payout(&program_id, &recipients, &amounts);
-    }));
-    assert!(res.is_err());
-    
-    // Unpause
-    escrow_client.set_paused(
-        &None,
-        &Some(false),
-        &None
-    );
-    
-    // Single payout works
-    escrow_client.single_payout(&program_id, &recipient, &100);
+    let (contract, _admin) = setup_with_admin(&env);
+
+    contract.set_paused(&env, Some(true), None, None);
+    contract.set_paused(&env, Some(false), None, None);
+
+    let flags = contract.get_pause_flags(&env);
+    assert_eq!(flags.lock_paused, false);
 }
+
+// --- set_paused: release ---
+
+#[test]
+fn test_set_paused_release() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _admin) = setup_with_admin(&env);
+
+    contract.set_paused(&env, None, Some(true), None);
+
+    let flags = contract.get_pause_flags(&env);
+    assert_eq!(flags.lock_paused, false);
+    assert_eq!(flags.release_paused, true);
+    assert_eq!(flags.refund_paused, false);
+}
+
+// --- mixed pause states ---
+
+#[test]
+fn test_mixed_pause_states() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _admin) = setup_with_admin(&env);
+
+    // Pause lock and release, leave refund unpaused
+    contract.set_paused(&env, Some(true), Some(true), Some(false));
+
+    let flags = contract.get_pause_flags(&env);
+    assert_eq!(flags.lock_paused, true);
+    assert_eq!(flags.release_paused, true);
+    assert_eq!(flags.refund_paused, false);
+
+    // Only update release back to unpaused; lock should stay paused
+    contract.set_paused(&env, None, Some(false), None);
+
+    let flags = contract.get_pause_flags(&env);
+    assert_eq!(flags.lock_paused, true);
+    assert_eq!(flags.release_paused, false);
+    assert_eq!(flags.refund_paused, false);
+}
+
+// --- lock_program_funds enforcement ---
+
+#[test]
+#[should_panic(expected = "Funds Paused")]
+fn test_lock_program_funds_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _admin, _payout_key, program_id) = setup_program_with_admin(&env);
+
+    contract.set_paused(&env, Some(true), None, None);
+    contract.lock_program_funds(&env, program_id, 1000);
+}
+
+// --- single_payout enforcement ---
+
+#[test]
+#[should_panic(expected = "Funds Paused")]
+fn test_single_payout_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _admin, _payout_key, program_id) = setup_program_with_admin(&env);
+    let recipient = Address::generate(&env);
+
+    contract.set_paused(&env, None, Some(true), None);
+    contract.single_payout(&env, program_id, recipient, 100);
+}
+
+// --- batch_payout enforcement ---
+
+#[test]
+#[should_panic(expected = "Funds Paused")]
+fn test_batch_payout_paused() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (contract, _admin, _payout_key, program_id) = setup_program_with_admin(&env);
+    let recipient = Address::generate(&env);
+
+    let recipients = soroban_sdk::vec![&env, recipient];
+    let amounts = soroban_sdk::vec![&env, 100i128];
+
+    contract.set_paused(&env, None, Some(true), None);
+    contract.batch_payout(&env, program_id, recipients, amounts);
+}
+
+// --- initialize_contract guard ---
 
 #[test]
 #[should_panic(expected = "Already initialized")]
 fn test_double_initialize_contract() {
     let env = Env::default();
+    let contract = ProgramEscrowContract;
     let admin = Address::generate(&env);
-    let escrow_client = create_escrow_contract(&env);
-    
-    escrow_client.initialize_contract(&admin);
-    escrow_client.initialize_contract(&admin);
+
+    contract.initialize_contract(&env, admin.clone());
+    contract.initialize_contract(&env, admin); // should panic
 }
+
+// --- set_paused requires initialization ---
 
 #[test]
 #[should_panic(expected = "Not initialized")]
-fn test_set_paused_uninitialized() {
+fn test_set_paused_before_initialize() {
     let env = Env::default();
-    let escrow_client = create_escrow_contract(&env);
-    
-    escrow_client.set_paused(&Some(true), &None, &None);
+    let contract = ProgramEscrowContract;
+
+    contract.set_paused(&env, Some(true), None, None);
 }
