@@ -336,6 +336,11 @@ mod anti_abuse {
 }
 // ==================== END ANTI-ABUSE MODULE ====================
 
+// ==================== CONSTANTS ====================
+const BASIS_POINTS: i128 = 10_000;
+const MAX_FEE_RATE: i128 = 5_000; // 50% max fee
+const MAX_BATCH_SIZE: u32 = 20;
+
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
@@ -369,6 +374,7 @@ pub enum EscrowStatus {
     Locked,
     Released,
     Refunded,
+    PartiallyRefunded,
 }
 
 #[contracttype]
@@ -378,6 +384,8 @@ pub struct Escrow {
     pub amount: i128,
     pub status: EscrowStatus,
     pub deadline: u64,
+    pub refund_history: Vec<RefundRecord>,
+    pub remaining_amount: i128,
 }
 
 #[contracttype]
@@ -391,10 +399,10 @@ pub enum DataKey {
     RefundApproval(u64),     // bounty_id -> RefundApproval
     ReentrancyGuard,
     MultisigConfig,
-    ReleaseApproval(u64),    // bounty_id -> ReleaseApproval
-    PendingClaim(u64),       // bounty_id -> ClaimRecord
-    ClaimWindow,             // u64 seconds (global config)
-    PauseFlags,              // PauseFlags struct
+    ReleaseApproval(u64), // bounty_id -> ReleaseApproval
+    PendingClaim(u64),    // bounty_id -> ClaimRecord
+    ClaimWindow,          // u64 seconds (global config)
+    PauseFlags,           // PauseFlags struct
 }
 
 #[contracttype]
@@ -429,6 +437,84 @@ pub struct PauseStateChanged {
     pub operation: Symbol,
     pub paused: bool,
     pub admin: Address,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FeeConfig {
+    pub lock_fee_rate: i128,
+    pub release_fee_rate: i128,
+    pub fee_recipient: Address,
+    pub fee_enabled: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MultisigConfig {
+    pub threshold_amount: i128,
+    pub signers: Vec<Address>,
+    pub required_signatures: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseApproval {
+    pub bounty_id: u64,
+    pub contributor: Address,
+    pub approvals: Vec<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimRecord {
+    pub bounty_id: u64,
+    pub recipient: Address,
+    pub amount: i128,
+    pub expires_at: u64,
+    pub claimed: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RefundMode {
+    Full,
+    Partial,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundApproval {
+    pub bounty_id: u64,
+    pub amount: i128,
+    pub recipient: Address,
+    pub mode: RefundMode,
+    pub approved_by: Address,
+    pub approved_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefundRecord {
+    pub amount: i128,
+    pub recipient: Address,
+    pub timestamp: u64,
+    pub mode: RefundMode,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LockFundsItem {
+    pub bounty_id: u64,
+    pub depositor: Address,
+    pub amount: i128,
+    pub deadline: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseFundsItem {
+    pub bounty_id: u64,
+    pub contributor: Address,
 }
 
 #[contract]
@@ -743,8 +829,8 @@ impl BountyEscrowContract {
             return Err(Error::FundsPaused);
         }
 
-        let start = env.ledger().timestamp();
-        let caller = depositor.clone();
+        let _start = env.ledger().timestamp();
+        let _caller = depositor.clone();
 
         // Verify depositor authorization
         depositor.require_auth();
@@ -768,6 +854,8 @@ impl BountyEscrowContract {
             amount,
             status: EscrowStatus::Locked,
             deadline,
+            refund_history: vec![&env],
+            remaining_amount: amount,
         };
 
         // Extend the TTL of the storage entry to ensure it lives long enough
@@ -817,7 +905,7 @@ impl BountyEscrowContract {
         if Self::check_paused(&env, symbol_short!("release")) {
             return Err(Error::FundsPaused);
         }
-        let start = env.ledger().timestamp();
+        let _start = env.ledger().timestamp();
 
         // Ensure contract is initialized
         if env.storage().instance().has(&DataKey::ReentrancyGuard) {
@@ -906,7 +994,7 @@ impl BountyEscrowContract {
             return Err(Error::BountyNotFound);
         }
 
-        let mut escrow: Escrow = env
+        let escrow: Escrow = env
             .storage()
             .persistent()
             .get(&DataKey::Escrow(bounty_id))
@@ -1370,7 +1458,7 @@ impl BountyEscrowContract {
                         stats.total_released += escrow.amount;
                         stats.count_released += 1;
                     }
-                    EscrowStatus::Refunded => {
+                    EscrowStatus::Refunded | EscrowStatus::PartiallyRefunded => {
                         stats.total_refunded += escrow.amount;
                         stats.count_refunded += 1;
                     }
