@@ -15,6 +15,8 @@ const PROGRAM_DATA: Symbol = symbol_short!("ProgData");
 const SCHEDULES: Symbol = symbol_short!("Scheds");
 const RELEASE_HISTORY: Symbol = symbol_short!("RelHist");
 const NEXT_SCHEDULE_ID: Symbol = symbol_short!("NxtSched");
+const PROGRAM_INDEX: Symbol = symbol_short!("ProgIdx");
+const AUTH_KEY_INDEX: Symbol = symbol_short!("AuthIdx");
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,6 +54,17 @@ pub struct ProgramReleaseHistory {
     pub recipient: Address,
     pub amount: i128,
     pub released_at: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramAggregateStats {
+    pub total_funds: i128,
+    pub remaining_balance: i128,
+    pub total_paid_out: i128,
+    pub payout_count: u32,
+    pub scheduled_count: u32,
+    pub released_count: u32,
 }
 
 #[contract]
@@ -445,6 +458,333 @@ impl ProgramEscrowContract {
             .instance()
             .get(&RELEASE_HISTORY)
             .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Query payout history by recipient with pagination
+    pub fn query_payouts_by_recipient(
+        env: Env,
+        recipient: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<PayoutRecord> {
+        let program_data: ProgramData = env
+            .storage()
+            .instance()
+            .get(&PROGRAM_DATA)
+            .unwrap_or_else(|| panic!("Program not initialized"));
+        let history = program_data.payout_history;
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..history.len() {
+            if count >= limit {
+                break;
+            }
+            let record = history.get(i).unwrap();
+            if record.recipient == recipient {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                results.push_back(record);
+                count += 1;
+            }
+        }
+        results
+    }
+
+    /// Query payout history by amount range
+    pub fn query_payouts_by_amount(
+        env: Env,
+        min_amount: i128,
+        max_amount: i128,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<PayoutRecord> {
+        let program_data: ProgramData = env
+            .storage()
+            .instance()
+            .get(&PROGRAM_DATA)
+            .unwrap_or_else(|| panic!("Program not initialized"));
+        let history = program_data.payout_history;
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..history.len() {
+            if count >= limit {
+                break;
+            }
+            let record = history.get(i).unwrap();
+            if record.amount >= min_amount && record.amount <= max_amount {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                results.push_back(record);
+                count += 1;
+            }
+        }
+        results
+    }
+
+    /// Query payout history by timestamp range
+    pub fn query_payouts_by_timestamp(
+        env: Env,
+        min_timestamp: u64,
+        max_timestamp: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<PayoutRecord> {
+        let program_data: ProgramData = env
+            .storage()
+            .instance()
+            .get(&PROGRAM_DATA)
+            .unwrap_or_else(|| panic!("Program not initialized"));
+        let history = program_data.payout_history;
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..history.len() {
+            if count >= limit {
+                break;
+            }
+            let record = history.get(i).unwrap();
+            if record.timestamp >= min_timestamp && record.timestamp <= max_timestamp {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                results.push_back(record);
+                count += 1;
+            }
+        }
+        results
+    }
+
+    /// Query release schedules by recipient
+    pub fn query_schedules_by_recipient(
+        env: Env,
+        recipient: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<ProgramReleaseSchedule> {
+        let schedules: Vec<ProgramReleaseSchedule> = env
+            .storage()
+            .instance()
+            .get(&SCHEDULES)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..schedules.len() {
+            if count >= limit {
+                break;
+            }
+            let schedule = schedules.get(i).unwrap();
+            if schedule.recipient == recipient {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                results.push_back(schedule);
+                count += 1;
+            }
+        }
+        results
+    }
+
+    /// Query release schedules by released status
+    pub fn query_schedules_by_status(
+        env: Env,
+        released: bool,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<ProgramReleaseSchedule> {
+        let schedules: Vec<ProgramReleaseSchedule> = env
+            .storage()
+            .instance()
+            .get(&SCHEDULES)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..schedules.len() {
+            if count >= limit {
+                break;
+            }
+            let schedule = schedules.get(i).unwrap();
+            if schedule.released == released {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                results.push_back(schedule);
+                count += 1;
+            }
+        }
+        results
+    }
+
+    /// Query release history with filtering and pagination
+    pub fn query_releases_by_recipient(
+        env: Env,
+        recipient: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<ProgramReleaseHistory> {
+        let history: Vec<ProgramReleaseHistory> = env
+            .storage()
+            .instance()
+            .get(&RELEASE_HISTORY)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..history.len() {
+            if count >= limit {
+                break;
+            }
+            let record = history.get(i).unwrap();
+            if record.recipient == recipient {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                results.push_back(record);
+                count += 1;
+            }
+        }
+        results
+    }
+
+    /// Get aggregate statistics for the program
+    pub fn get_program_aggregate_stats(env: Env) -> ProgramAggregateStats {
+        let program_data: ProgramData = env
+            .storage()
+            .instance()
+            .get(&PROGRAM_DATA)
+            .unwrap_or_else(|| panic!("Program not initialized"));
+        let schedules: Vec<ProgramReleaseSchedule> = env
+            .storage()
+            .instance()
+            .get(&SCHEDULES)
+            .unwrap_or_else(|| Vec::new(&env));
+
+        let mut scheduled_count = 0u32;
+        let mut released_count = 0u32;
+
+        for i in 0..schedules.len() {
+            let schedule = schedules.get(i).unwrap();
+            if schedule.released {
+                released_count += 1;
+            } else {
+                scheduled_count += 1;
+            }
+        }
+
+        ProgramAggregateStats {
+            total_funds: program_data.total_funds,
+            remaining_balance: program_data.remaining_balance,
+            total_paid_out: program_data.total_funds - program_data.remaining_balance,
+            payout_count: program_data.payout_history.len(),
+            scheduled_count,
+            released_count,
+        }
+    }
+
+    /// Get payouts by recipient
+    pub fn get_payouts_by_recipient(
+        env: Env,
+        recipient: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<PayoutRecord> {
+        let program_data: ProgramData = env
+            .storage()
+            .instance()
+            .get(&PROGRAM_DATA)
+            .unwrap_or_else(|| panic!("Program not initialized"));
+        let history = program_data.payout_history;
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..history.len() {
+            if count >= limit {
+                break;
+            }
+            let record = history.get(i).unwrap();
+            if record.recipient == recipient {
+                if skipped < offset {
+                    skipped += 1;
+                    continue;
+                }
+                results.push_back(record);
+                count += 1;
+            }
+        }
+        results
+    }
+
+    /// Get pending schedules (not yet released)
+    pub fn get_pending_schedules(env: Env) -> Vec<ProgramReleaseSchedule> {
+        let schedules: Vec<ProgramReleaseSchedule> = env
+            .storage()
+            .instance()
+            .get(&SCHEDULES)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut results = Vec::new(&env);
+
+        for i in 0..schedules.len() {
+            let schedule = schedules.get(i).unwrap();
+            if !schedule.released {
+                results.push_back(schedule);
+            }
+        }
+        results
+    }
+
+    /// Get due schedules (ready to be released)
+    pub fn get_due_schedules(env: Env) -> Vec<ProgramReleaseSchedule> {
+        let schedules: Vec<ProgramReleaseSchedule> = env
+            .storage()
+            .instance()
+            .get(&SCHEDULES)
+            .unwrap_or_else(|| Vec::new(&env));
+        let now = env.ledger().timestamp();
+        let mut results = Vec::new(&env);
+
+        for i in 0..schedules.len() {
+            let schedule = schedules.get(i).unwrap();
+            if !schedule.released && schedule.release_timestamp <= now {
+                results.push_back(schedule);
+            }
+        }
+        results
+    }
+
+    /// Get total amount in pending schedules
+    pub fn get_total_scheduled_amount(env: Env) -> i128 {
+        let schedules: Vec<ProgramReleaseSchedule> = env
+            .storage()
+            .instance()
+            .get(&SCHEDULES)
+            .unwrap_or_else(|| Vec::new(&env));
+        let mut total = 0i128;
+
+        for i in 0..schedules.len() {
+            let schedule = schedules.get(i).unwrap();
+            if !schedule.released {
+                total += schedule.amount;
+            }
+        }
+        total
     }
 }
 

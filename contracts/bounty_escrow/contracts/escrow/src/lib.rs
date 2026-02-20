@@ -6,7 +6,7 @@ use events::{
     emit_bounty_initialized, emit_funds_locked, emit_funds_refunded, emit_funds_released,
     BountyEscrowInitialized, FundsLocked, FundsRefunded, FundsReleased,
 };
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, Vec};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -42,7 +42,27 @@ pub struct Escrow {
 pub enum DataKey {
     Admin,
     Token,
-    Escrow(u64), // bounty_id
+    Escrow(u64),             // bounty_id
+    EscrowIndex,             // Vec<u64> of all bounty_ids
+    DepositorIndex(Address), // Vec<u64> of bounty_ids by depositor
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EscrowWithId {
+    pub bounty_id: u64,
+    pub escrow: Escrow,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AggregateStats {
+    pub total_locked: i128,
+    pub total_released: i128,
+    pub total_refunded: i128,
+    pub count_locked: u32,
+    pub count_released: u32,
+    pub count_refunded: u32,
 }
 
 #[contract]
@@ -105,6 +125,28 @@ impl BountyEscrowContract {
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(bounty_id), &escrow);
+
+        // Update indexes
+        let mut index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowIndex)
+            .unwrap_or(Vec::new(&env));
+        index.push_back(bounty_id);
+        env.storage()
+            .persistent()
+            .set(&DataKey::EscrowIndex, &index);
+
+        let mut depositor_index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DepositorIndex(depositor.clone()))
+            .unwrap_or(Vec::new(&env));
+        depositor_index.push_back(bounty_id);
+        env.storage().persistent().set(
+            &DataKey::DepositorIndex(depositor.clone()),
+            &depositor_index,
+        );
 
         // Emit value allows for off-chain indexing
         emit_funds_locked(
@@ -247,6 +289,249 @@ impl BountyEscrowContract {
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(&env, &token_addr);
         Ok(client.balance(&env.current_contract_address()))
+    }
+
+    /// Query escrows with filtering and pagination
+    /// Pass 0 for min values and i128::MAX/u64::MAX for max values to disable those filters
+    pub fn query_escrows_by_status(
+        env: Env,
+        status: EscrowStatus,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<EscrowWithId> {
+        let index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowIndex)
+            .unwrap_or(Vec::new(&env));
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..index.len() {
+            if count >= limit {
+                break;
+            }
+
+            let bounty_id = index.get(i).unwrap();
+            if let Some(escrow) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Escrow>(&DataKey::Escrow(bounty_id))
+            {
+                if escrow.status == status {
+                    if skipped < offset {
+                        skipped += 1;
+                        continue;
+                    }
+                    results.push_back(EscrowWithId { bounty_id, escrow });
+                    count += 1;
+                }
+            }
+        }
+        results
+    }
+
+    /// Query escrows with amount range filtering
+    pub fn query_escrows_by_amount(
+        env: Env,
+        min_amount: i128,
+        max_amount: i128,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<EscrowWithId> {
+        let index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowIndex)
+            .unwrap_or(Vec::new(&env));
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..index.len() {
+            if count >= limit {
+                break;
+            }
+
+            let bounty_id = index.get(i).unwrap();
+            if let Some(escrow) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Escrow>(&DataKey::Escrow(bounty_id))
+            {
+                if escrow.amount >= min_amount && escrow.amount <= max_amount {
+                    if skipped < offset {
+                        skipped += 1;
+                        continue;
+                    }
+                    results.push_back(EscrowWithId { bounty_id, escrow });
+                    count += 1;
+                }
+            }
+        }
+        results
+    }
+
+    /// Query escrows with deadline range filtering
+    pub fn query_escrows_by_deadline(
+        env: Env,
+        min_deadline: u64,
+        max_deadline: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<EscrowWithId> {
+        let index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowIndex)
+            .unwrap_or(Vec::new(&env));
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..index.len() {
+            if count >= limit {
+                break;
+            }
+
+            let bounty_id = index.get(i).unwrap();
+            if let Some(escrow) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Escrow>(&DataKey::Escrow(bounty_id))
+            {
+                if escrow.deadline >= min_deadline && escrow.deadline <= max_deadline {
+                    if skipped < offset {
+                        skipped += 1;
+                        continue;
+                    }
+                    results.push_back(EscrowWithId { bounty_id, escrow });
+                    count += 1;
+                }
+            }
+        }
+        results
+    }
+
+    /// Query escrows by depositor
+    pub fn query_escrows_by_depositor(
+        env: Env,
+        depositor: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<EscrowWithId> {
+        let index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::DepositorIndex(depositor))
+            .unwrap_or(Vec::new(&env));
+        let mut results = Vec::new(&env);
+        let start = offset.min(index.len());
+        let end = (offset + limit).min(index.len());
+
+        for i in start..end {
+            let bounty_id = index.get(i).unwrap();
+            if let Some(escrow) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Escrow>(&DataKey::Escrow(bounty_id))
+            {
+                results.push_back(EscrowWithId { bounty_id, escrow });
+            }
+        }
+        results
+    }
+
+    /// Get aggregate statistics
+    pub fn get_aggregate_stats(env: Env) -> AggregateStats {
+        let index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowIndex)
+            .unwrap_or(Vec::new(&env));
+        let mut stats = AggregateStats {
+            total_locked: 0,
+            total_released: 0,
+            total_refunded: 0,
+            count_locked: 0,
+            count_released: 0,
+            count_refunded: 0,
+        };
+
+        for i in 0..index.len() {
+            let bounty_id = index.get(i).unwrap();
+            if let Some(escrow) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Escrow>(&DataKey::Escrow(bounty_id))
+            {
+                match escrow.status {
+                    EscrowStatus::Locked => {
+                        stats.total_locked += escrow.amount;
+                        stats.count_locked += 1;
+                    }
+                    EscrowStatus::Released => {
+                        stats.total_released += escrow.amount;
+                        stats.count_released += 1;
+                    }
+                    EscrowStatus::Refunded => {
+                        stats.total_refunded += escrow.amount;
+                        stats.count_refunded += 1;
+                    }
+                }
+            }
+        }
+        stats
+    }
+
+    /// Get total count of escrows
+    pub fn get_escrow_count(env: Env) -> u32 {
+        let index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowIndex)
+            .unwrap_or(Vec::new(&env));
+        index.len()
+    }
+
+    /// Get escrow IDs by status
+    pub fn get_escrow_ids_by_status(
+        env: Env,
+        status: EscrowStatus,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<u64> {
+        let index: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::EscrowIndex)
+            .unwrap_or(Vec::new(&env));
+        let mut results = Vec::new(&env);
+        let mut count = 0u32;
+        let mut skipped = 0u32;
+
+        for i in 0..index.len() {
+            if count >= limit {
+                break;
+            }
+            let bounty_id = index.get(i).unwrap();
+            if let Some(escrow) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Escrow>(&DataKey::Escrow(bounty_id))
+            {
+                if escrow.status == status {
+                    if skipped < offset {
+                        skipped += 1;
+                        continue;
+                    }
+                    results.push_back(bounty_id);
+                    count += 1;
+                }
+            }
+        }
+        results
     }
 }
 
