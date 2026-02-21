@@ -905,20 +905,10 @@ fn test_update_fee_config_rejects_over_100_percent_release_fee() {
 }
 
 // ── Min/Max Amount Policy Enforcement Tests ───────────────────────────────────
-//
-// These tests define the expected behaviour for configurable min/max amount
-// limits (Issue #62). They are written TDD-style: they will compile only after
-// the implementation adds:
-//   • `set_amount_policy(admin, min_amount, max_amount)` to the contract
-//   • `Error::AmountBelowMinimum = 8` in the Error enum
-//   • `Error::AmountAboveMaximum = 9` in the Error enum
-//
-// Until Issue #62 is merged these tests are expected to fail.
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Locking an amount strictly below the configured minimum must be rejected.
 #[test]
-#[should_panic(expected = "Error(Contract, #8)")] // AmountBelowMinimum
+#[should_panic(expected = "Error(Contract, #19)")] // AmountBelowMinimum
 fn test_lock_funds_below_minimum_rejected() {
     let (env, client, _) = create_test_env();
     let admin = Address::generate(&env);
@@ -939,7 +929,7 @@ fn test_lock_funds_below_minimum_rejected() {
 
 /// Locking an amount strictly above the configured maximum must be rejected.
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")] // AmountAboveMaximum
+#[should_panic(expected = "Error(Contract, #20)")] // AmountAboveMaximum
 fn test_lock_funds_above_maximum_rejected() {
     let (env, client, _) = create_test_env();
     let admin = Address::generate(&env);
@@ -1120,7 +1110,7 @@ fn test_amount_policy_can_be_updated_by_admin() {
 /// min - 1 is the tightest possible value below the minimum boundary and must
 /// be rejected (off-by-one lower).
 #[test]
-#[should_panic(expected = "Error(Contract, #8)")] // AmountBelowMinimum
+#[should_panic(expected = "Error(Contract, #19)")] // AmountBelowMinimum
 fn test_one_below_minimum_boundary_rejected() {
     let (env, client, _) = create_test_env();
     let admin = Address::generate(&env);
@@ -1142,7 +1132,7 @@ fn test_one_below_minimum_boundary_rejected() {
 /// max + 1 is the tightest possible value above the maximum boundary and must
 /// be rejected (off-by-one upper).
 #[test]
-#[should_panic(expected = "Error(Contract, #9)")] // AmountAboveMaximum
+#[should_panic(expected = "Error(Contract, #20)")] // AmountAboveMaximum
 fn test_one_above_maximum_boundary_rejected() {
     let (env, client, _) = create_test_env();
     let admin = Address::generate(&env);

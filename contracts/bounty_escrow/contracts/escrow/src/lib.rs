@@ -352,9 +352,6 @@ pub enum Error {
     FundsNotLocked = 5,
     DeadlineNotPassed = 6,
     Unauthorized = 7,
-    // Added for Issue #62 – configurable min/max amount policy
-    AmountBelowMinimum = 8,
-    AmountAboveMaximum = 9,
     InvalidFeeRate = 8,
     FeeRecipientNotSet = 9,
     InvalidBatchSize = 10,
@@ -369,6 +366,10 @@ pub enum Error {
     /// Returned when refund is attempted without admin approval
     RefundNotApproved = 17,
     FundsPaused = 18,
+    /// Returned when lock amount is below the configured policy minimum (Issue #62)
+    AmountBelowMinimum = 19,
+    /// Returned when lock amount is above the configured policy maximum (Issue #62)
+    AmountAboveMaximum = 20,
 }
 
 #[contracttype]
@@ -409,6 +410,7 @@ pub enum DataKey {
     PendingClaim(u64),    // bounty_id -> ClaimRecord
     ClaimWindow,          // u64 seconds (global config)
     PauseFlags,           // PauseFlags struct
+    AmountPolicy, // Option<(i128, i128)> — (min_amount, max_amount) set by set_amount_policy
 }
 
 #[contracttype]
@@ -850,6 +852,22 @@ impl BountyEscrowContract {
             return Err(Error::BountyExists);
         }
 
+        // Enforce min/max amount policy if one has been configured (Issue #62).
+        // When no policy is set this block is skipped entirely, preserving
+        // backward-compatible behaviour for callers that never call set_amount_policy.
+        if let Some((min_amount, max_amount)) = env
+            .storage()
+            .instance()
+            .get::<DataKey, (i128, i128)>(&DataKey::AmountPolicy)
+        {
+            if amount < min_amount {
+                return Err(Error::AmountBelowMinimum);
+            }
+            if amount > max_amount {
+                return Err(Error::AmountAboveMaximum);
+            }
+        }
+
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(&env, &token_addr);
 
@@ -1284,6 +1302,7 @@ impl BountyEscrowContract {
         emit_funds_released(
             &env,
             FundsReleased {
+                version: EVENT_VERSION_V2,
                 bounty_id,
                 amount: payout_amount,
                 recipient: contributor.clone(),
@@ -1575,6 +1594,16 @@ impl BountyEscrowContract {
         index.len()
     }
 
+    /// Set the minimum and maximum allowed lock amount (admin only).
+    ///
+    /// Once set, any call to lock_funds with an amount outside [min_amount, max_amount]
+    /// will be rejected with AmountBelowMinimum or AmountAboveMaximum respectively.
+    /// The policy can be updated at any time by the admin; new limits take effect
+    /// immediately for subsequent lock_funds calls.
+    ///
+    /// Passing min_amount == max_amount restricts locking to a single exact value.
+    /// min_amount must not exceed max_amount — the call panics if this invariant
+    /// is violated.
     pub fn set_amount_policy(
         env: Env,
         caller: Address,
@@ -1594,8 +1623,10 @@ impl BountyEscrowContract {
             panic!("invalid policy: min_amount cannot exceed max_amount");
         }
 
-        // TODO (Issue #62): persist policy and enforce in lock_funds.
-        // env.storage().instance().set(&DataKey::AmountPolicy, &(min_amount, max_amount));
+        // Persist the policy so lock_funds can enforce it on every subsequent call.
+        env.storage()
+            .instance()
+            .set(&DataKey::AmountPolicy, &(min_amount, max_amount));
 
         Ok(())
     }
