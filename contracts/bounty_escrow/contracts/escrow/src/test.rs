@@ -563,3 +563,382 @@ fn test_refund_after_partial_release_returns_only_remainder() {
     );
     assert_eq!(setup.token.balance(&setup.escrow.address), 0);
 }
+
+// Claim Period Expiry and Cancellation Tests
+
+/// Set a claim window, authorize a claim, and have the beneficiary claim
+/// within the window. Funds must transfer and escrow status must be Released.
+#[test]
+fn test_claim_within_window_transfers_funds() {
+    let setup = TestSetup::new();
+    let bounty_id = 100_u64;
+    let amount = 1_000_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    setup.escrow.set_claim_window(&500_u64);
+
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    let pending = setup.escrow.get_pending_claim(&bounty_id);
+    assert_eq!(pending.recipient, setup.contributor);
+    assert_eq!(pending.amount, amount);
+    assert!(!pending.claimed);
+    assert!(pending.expires_at > setup.env.ledger().timestamp());
+
+    let before = setup.token.balance(&setup.contributor);
+    setup.escrow.claim(&bounty_id);
+    assert_eq!(setup.token.balance(&setup.contributor), before + amount);
+    assert_eq!(setup.token.balance(&setup.escrow.address), 0);
+    let escrow_info = setup.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(escrow_info.status, EscrowStatus::Released);
+    let claim_after = setup.escrow.get_pending_claim(&bounty_id);
+    assert!(claim_after.claimed);
+}
+
+/// Authorize a claim then advance time past the window. Calling claim() must
+/// fail — funds must NOT leave the contract and escrow must stay Locked.
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")] // DeadlineNotPassed reused for ClaimExpired
+fn test_claim_after_window_expires_panics() {
+    let setup = TestSetup::new();
+    let bounty_id = 101_u64;
+    let amount = 1_000_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    // Admin sets a 200-second window
+    setup.escrow.set_claim_window(&200_u64);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+
+    // Advance ledger time past the claim window
+    let now = setup.env.ledger().timestamp();
+    setup.env.ledger().set_timestamp(now + 201);
+
+    // This must panic — window has expired
+    setup.escrow.claim(&bounty_id);
+}
+
+/// Admin cancels a pending claim. The PendingClaim record must be removed and
+/// the escrow must remain Locked so it can be re-authorized or refunded later.
+#[test]
+fn test_cancel_pending_claim_restores_escrow() {
+    let setup = TestSetup::new();
+    let bounty_id = 102_u64;
+    let amount = 2_000_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    setup.escrow.set_claim_window(&300_u64);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    let pending = setup.escrow.get_pending_claim(&bounty_id);
+    assert_eq!(pending.amount, amount);
+    setup.escrow.cancel_pending_claim(&bounty_id);
+    let result = setup.escrow.try_get_pending_claim(&bounty_id);
+    assert!(
+        result.is_err(),
+        "PendingClaim should be removed after cancel"
+    );
+    let escrow_info = setup.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(escrow_info.status, EscrowStatus::Locked);
+    assert_eq!(setup.token.balance(&setup.escrow.address), amount);
+    assert_eq!(setup.token.balance(&setup.contributor), 0);
+}
+
+/// Cancelling a claim that does not exist must return BountyNotFound.
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")] // BountyNotFound
+fn test_cancel_pending_claim_not_found() {
+    let setup = TestSetup::new();
+    setup.escrow.cancel_pending_claim(&999_u64);
+}
+
+/// After cancelling an expired claim the admin can authorize a new one for a
+/// different (or same) recipient, and that new claim can be claimed normally.
+#[test]
+fn test_cancel_expired_claim_then_authorize_new_one() {
+    let setup = TestSetup::new();
+    let bounty_id = 103_u64;
+    let amount = 1_500_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+    let new_contributor = Address::generate(&setup.env);
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.set_claim_window(&100_u64);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+    let now = setup.env.ledger().timestamp();
+    setup.env.ledger().set_timestamp(now + 101);
+    setup.escrow.cancel_pending_claim(&bounty_id);
+    setup.escrow.set_claim_window(&1_000_u64);
+    setup.escrow.authorize_claim(&bounty_id, &new_contributor);
+
+    let new_pending = setup.escrow.get_pending_claim(&bounty_id);
+    assert_eq!(new_pending.recipient, new_contributor);
+    assert!(!new_pending.claimed);
+
+    setup.escrow.claim(&bounty_id);
+
+    assert_eq!(setup.token.balance(&new_contributor), amount);
+    assert_eq!(setup.token.balance(&setup.escrow.address), 0);
+
+    let escrow_info = setup.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(escrow_info.status, EscrowStatus::Released);
+}
+
+/// After cancelling a pending claim, calling release_funds normally must still
+/// work — the escrow is Locked and available for the standard release path.
+#[test]
+fn test_cancel_claim_then_use_release_funds_normally() {
+    let setup = TestSetup::new();
+    let bounty_id = 104_u64;
+    let amount = 800_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    setup.escrow.set_claim_window(&300_u64);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+
+    // Admin cancels the claim
+    setup.escrow.cancel_pending_claim(&bounty_id);
+
+    // Standard release still works
+    setup.escrow.release_funds(&bounty_id, &setup.contributor);
+
+    assert_eq!(setup.token.balance(&setup.contributor), amount);
+    let escrow_info = setup.escrow.get_escrow_info(&bounty_id);
+    assert_eq!(escrow_info.status, EscrowStatus::Released);
+}
+
+/// Attempting to claim a bounty twice must fail with FundsNotLocked on the
+/// second attempt (funds already claimed / escrow already Released).
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")] // FundsNotLocked
+fn test_claim_twice_panics() {
+    let setup = TestSetup::new();
+    let bounty_id = 105_u64;
+    let amount = 500_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    setup.escrow.set_claim_window(&500_u64);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+
+    // First claim succeeds
+    setup.escrow.claim(&bounty_id);
+
+    // Second claim must panic
+    setup.escrow.claim(&bounty_id);
+}
+
+/// Claiming one bounty must not affect the balance or status of another
+/// unrelated bounty sitting in the same contract.
+#[test]
+fn test_claim_does_not_affect_other_bounties() {
+    let setup = TestSetup::new();
+    let bounty_a = 106_u64;
+    let bounty_b = 107_u64;
+    let amount = 1_000_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_a, &amount, &deadline);
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_b, &amount, &deadline);
+
+    setup.escrow.set_claim_window(&500_u64);
+    setup.escrow.authorize_claim(&bounty_a, &setup.contributor);
+
+    // Claim only bounty_a
+    setup.escrow.claim(&bounty_a);
+
+    // bounty_b must remain Locked and untouched
+    let escrow_b = setup.escrow.get_escrow_info(&bounty_b);
+    assert_eq!(escrow_b.status, EscrowStatus::Locked);
+    assert_eq!(escrow_b.remaining_amount, amount);
+
+    // Total contract balance = only bounty_b funds remain
+    assert_eq!(setup.token.balance(&setup.escrow.address), amount);
+}
+
+/// When no claim window is explicitly set (default 0) authorize_claim creates a
+/// claim that expires immediately (expires_at == now). Any claim() call must fail.
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")] // DeadlineNotPassed / ClaimExpired
+fn test_authorize_claim_zero_window_expires_immediately() {
+    let setup = TestSetup::new();
+    let bounty_id = 108_u64;
+    let amount = 1_000_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    // Do NOT set a claim window — default is 0
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+
+    // Even without time advancing, expires_at == now so claim must fail
+    // Advance by 1 second to make now > expires_at
+    let now = setup.env.ledger().timestamp();
+    setup.env.ledger().set_timestamp(now + 1);
+
+    setup.escrow.claim(&bounty_id);
+}
+
+/// Claim at the exact boundary (now == expires_at) must succeed — the window
+/// is inclusive of the final second.
+#[test]
+fn test_claim_at_exact_window_boundary_succeeds() {
+    let setup = TestSetup::new();
+    let bounty_id = 109_u64;
+    let amount = 1_000_i128;
+    let now = setup.env.ledger().timestamp();
+    let deadline = now + 10_000;
+    let window = 300_u64;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    setup.escrow.set_claim_window(&window);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+
+    let pending = setup.escrow.get_pending_claim(&bounty_id);
+    setup.env.ledger().set_timestamp(pending.expires_at);
+    setup.escrow.claim(&bounty_id);
+
+    assert_eq!(setup.token.balance(&setup.contributor), amount);
+}
+
+/// authorize_claim on a bounty_id that does not exist must return BountyNotFound.
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")] // BountyNotFound
+fn test_authorize_claim_on_nonexistent_bounty() {
+    let setup = TestSetup::new();
+    setup.escrow.authorize_claim(&999_u64, &setup.contributor);
+}
+
+/// authorize_claim on a bounty that is already Released must return FundsNotLocked.
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")] // FundsNotLocked
+fn test_authorize_claim_on_released_bounty() {
+    let setup = TestSetup::new();
+    let bounty_id = 110_u64;
+    let amount = 1_000_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+    setup.escrow.release_funds(&bounty_id, &setup.contributor);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+}
+
+/// authorize_claim on a Refunded bounty must return FundsNotLocked.
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")] // FundsNotLocked
+fn test_authorize_claim_on_refunded_bounty() {
+    let setup = TestSetup::new();
+    let bounty_id = 111_u64;
+    let amount = 1_000_i128;
+    let now = setup.env.ledger().timestamp();
+    let deadline = now + 500;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    setup.env.ledger().set_timestamp(deadline + 1);
+    setup.escrow.refund(&bounty_id);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+}
+
+/// When set_claim_window has never been called the default window (0) is used.
+/// The pending claim's expires_at must equal the ledger timestamp at auth time.
+#[test]
+fn test_authorize_claim_default_window_used_when_not_set() {
+    let setup = TestSetup::new();
+    let bounty_id = 112_u64;
+    let amount = 1_000_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    let auth_time = setup.env.ledger().timestamp();
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+
+    let pending = setup.escrow.get_pending_claim(&bounty_id);
+    assert_eq!(pending.expires_at, auth_time);
+}
+
+/// Verifies set_claim_window stores the value and authorize_claim uses it.
+#[test]
+fn test_set_claim_window_success() {
+    let setup = TestSetup::new();
+    let bounty_id = 113_u64;
+    let amount = 1_000_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+    let window = 600_u64;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    setup.escrow.set_claim_window(&window);
+
+    let auth_time = setup.env.ledger().timestamp();
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+
+    let pending = setup.escrow.get_pending_claim(&bounty_id);
+    assert_eq!(pending.expires_at, auth_time + window);
+}
+
+/// get_pending_claim on a bounty with no pending claim must return BountyNotFound.
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")] // BountyNotFound
+fn test_get_pending_claim_not_found() {
+    let setup = TestSetup::new();
+    setup.escrow.get_pending_claim(&999_u64);
+}
+
+/// authorize_claim creates a ClaimRecord with the correct bounty_id and amount.
+#[test]
+fn test_authorize_claim_creates_pending_claim() {
+    let setup = TestSetup::new();
+    let bounty_id = 114_u64;
+    let amount = 3_000_i128;
+    let deadline = setup.env.ledger().timestamp() + 10_000;
+
+    setup
+        .escrow
+        .lock_funds(&setup.depositor, &bounty_id, &amount, &deadline);
+
+    setup.escrow.set_claim_window(&400_u64);
+    setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
+
+    let pending = setup.escrow.get_pending_claim(&bounty_id);
+    assert_eq!(pending.bounty_id, bounty_id);
+    assert_eq!(pending.amount, amount);
+    assert_eq!(pending.recipient, setup.contributor);
+    assert!(!pending.claimed);
+}
