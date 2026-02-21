@@ -147,6 +147,9 @@ mod error_recovery;
 #[cfg(test)]
 mod error_recovery_tests;
 
+#[cfg(test)]
+mod test_dispute_resolution;
+
 // ── Step 2: Add these public contract functions to the ProgramEscrowContract
 //    impl block (alongside the existing admin functions) ──────────────────
 
