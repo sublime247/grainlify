@@ -285,7 +285,7 @@ fn test_release_schedule_exact_timestamp_boundary() {
     let recipient = Address::generate(&env);
 
     let now = env.ledger().timestamp();
-    let schedule = client.create_program_release_schedule(&recipient, &25_000, &(now + 100));
+    let schedule = client.create_program_release_schedule(&25_000, &(now + 100), &recipient);
 
     env.ledger().set_timestamp(now + 100);
     let released = client.trigger_program_releases();
@@ -305,7 +305,7 @@ fn test_release_schedule_just_before_timestamp_rejected() {
     let recipient = Address::generate(&env);
 
     let now = env.ledger().timestamp();
-    client.create_program_release_schedule(&recipient, &20_000, &(now + 80));
+    client.create_program_release_schedule(&20_000, &(now + 80), &recipient);
 
     env.ledger().set_timestamp(now + 79);
     let released = client.trigger_program_releases();
@@ -323,7 +323,7 @@ fn test_release_schedule_significantly_after_timestamp_releases() {
     let recipient = Address::generate(&env);
 
     let now = env.ledger().timestamp();
-    client.create_program_release_schedule(&recipient, &30_000, &(now + 60));
+    client.create_program_release_schedule(&30_000, &(now + 60), &recipient);
 
     env.ledger().set_timestamp(now + 10_000);
     let released = client.trigger_program_releases();
@@ -340,9 +340,9 @@ fn test_release_schedule_overlapping_schedules() {
     let recipient3 = Address::generate(&env);
 
     let now = env.ledger().timestamp();
-    client.create_program_release_schedule(&recipient1, &10_000, &(now + 50));
-    client.create_program_release_schedule(&recipient2, &15_000, &(now + 50)); // overlapping timestamp
-    client.create_program_release_schedule(&recipient3, &20_000, &(now + 120));
+    client.create_program_release_schedule(&10_000, &(now + 50), &recipient1);
+    client.create_program_release_schedule(&15_000, &(now + 50), &recipient2);
+    client.create_program_release_schedule(&20_000, &(now + 120), &recipient3);
 
     env.ledger().set_timestamp(now + 50);
     let released_at_overlap = client.trigger_program_releases();
@@ -544,6 +544,95 @@ fn test_full_lifecycle_multi_program_batch_payouts() {
     );
 }
 
+#[test]
+fn test_anti_abuse_whitelist_bypass() {
+    let env = Env::default();
+    let lock_amount = 100_000_000_000i128;
+    let (client, admin, _token_client, _token_admin) = setup_program(&env, lock_amount);
+
+    client.set_admin(&admin);
+
+    let config = client.get_rate_limit_config();
+    let max_ops = config.max_operations;
+    let recipient = Address::generate(&env);
+
+    let start_time = 1_000_000;
+    env.ledger().set_timestamp(start_time);
+
+    client.set_whitelist(&admin, &true);
+
+    env.ledger()
+        .set_timestamp(start_time + config.cooldown_period + 1);
+
+    for _ in 0..(max_ops + 5) {
+        client.single_payout(&recipient, &100);
+    }
+
+    let info = client.get_program_info();
+    assert_eq!(info.payout_history.len() as u32, max_ops + 5);
+}
+
+// =============================================================================
+// TESTS FOR batch_initialize_programs
+// =============================================================================
+
+#[test]
+fn test_batch_initialize_programs_success() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, ProgramEscrowContract);
+    let client = ProgramEscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let mut items = Vec::new(&env);
+    items.push_back(ProgramInitItem {
+        program_id: String::from_str(&env, "prog-1"),
+        authorized_payout_key: admin.clone(),
+        token_address: token.clone(),
+    });
+    items.push_back(ProgramInitItem {
+        program_id: String::from_str(&env, "prog-2"),
+        authorized_payout_key: admin.clone(),
+        token_address: token.clone(),
+    });
+    let count = client.try_batch_initialize_programs(&items).unwrap().unwrap();
+    assert_eq!(count, 2);
+    assert!(client.program_exists(&String::from_str(&env, "prog-1")));
+    assert!(client.program_exists(&String::from_str(&env, "prog-2")));
+}
+
+#[test]
+fn test_batch_initialize_programs_empty_err() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, ProgramEscrowContract);
+    let client = ProgramEscrowContractClient::new(&env, &contract_id);
+    let items: Vec<ProgramInitItem> = Vec::new(&env);
+    let res = client.try_batch_initialize_programs(&items);
+    assert!(matches!(res, Err(Ok(BatchError::InvalidBatchSize))));
+}
+
+#[test]
+fn test_batch_initialize_programs_duplicate_id_err() {
+    let env = Env::default();
+    let contract_id = env.register_contract(None, ProgramEscrowContract);
+    let client = ProgramEscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+    let pid = String::from_str(&env, "same-id");
+    let mut items = Vec::new(&env);
+    items.push_back(ProgramInitItem {
+        program_id: pid.clone(),
+        authorized_payout_key: admin.clone(),
+        token_address: token.clone(),
+    });
+    items.push_back(ProgramInitItem {
+        program_id: pid,
+        authorized_payout_key: admin.clone(),
+        token_address: token.clone(),
+    });
+    let res = client.try_batch_initialize_programs(&items);
+    assert!(matches!(res, Err(Ok(BatchError::DuplicateProgramId))));
+}
+
 // =============================================================================
 // TESTS FOR MULTI-TENANT ISOLATION
 // =============================================================================
@@ -556,6 +645,357 @@ fn test_full_lifecycle_multi_program_batch_payouts() {
 // - Release schedule isolation
 // - Release history isolation
 // - Analytics isolation concepts (for future program-specific analytics)
+
+// =============================================================================
+// TESTS FOR PROGRAM ANALYTICS AND MONITORING VIEWS
+// =============================================================================
+
+// Test: get_program_aggregate_stats returns correct initial values
+#[test]
+fn test_analytics_initial_state() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    let stats = client.get_program_aggregate_stats();
+
+    assert_eq!(stats.total_funds, 0);
+    assert_eq!(stats.remaining_balance, 0);
+    assert_eq!(stats.total_paid_out, 0);
+    assert_eq!(stats.payout_count, 0);
+    assert_eq!(stats.scheduled_count, 0);
+    assert_eq!(stats.released_count, 0);
+}
+
+// Test: get_program_aggregate_stats reflects locked funds correctly
+#[test]
+fn test_analytics_after_lock_funds() {
+    let env = Env::default();
+    let locked_amount = 50_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, locked_amount);
+
+    let stats = client.get_program_aggregate_stats();
+
+    assert_eq!(stats.total_funds, locked_amount);
+    assert_eq!(stats.remaining_balance, locked_amount);
+    assert_eq!(stats.total_paid_out, 0);
+    assert_eq!(stats.payout_count, 0);
+}
+
+// Test: get_program_aggregate_stats reflects single payouts correctly
+#[test]
+fn test_analytics_after_single_payout() {
+    let env = Env::default();
+    let initial_funds = 100_000_0000000i128;
+    let payout_amount = 25_000_0000000i128;
+    
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    let recipient = Address::generate(&env);
+    client.single_payout(&recipient, &payout_amount);
+
+    let stats = client.get_program_aggregate_stats();
+
+    assert_eq!(stats.total_funds, initial_funds);
+    assert_eq!(stats.remaining_balance, initial_funds - payout_amount);
+    assert_eq!(stats.total_paid_out, payout_amount);
+    assert_eq!(stats.payout_count, 1);
+}
+
+// Test: get_program_aggregate_stats reflects batch payouts correctly
+#[test]
+fn test_analytics_after_batch_payout() {
+    let env = Env::default();
+    let initial_funds = 100_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+
+    let recipients = vec![&env, r1.clone(), r2.clone(), r3.clone()];
+    let amounts = vec![&env, 10_000_0000000, 20_000_0000000, 30_000_0000000];
+
+    client.batch_payout(&recipients, &amounts);
+
+    let stats = client.get_program_aggregate_stats();
+
+    assert_eq!(stats.total_funds, initial_funds);
+    assert_eq!(stats.remaining_balance, 40_000_0000000i128);
+    assert_eq!(stats.total_paid_out, 60_000_0000000i128);
+    assert_eq!(stats.payout_count, 3);
+}
+
+// Test: aggregate stats after multiple operations
+#[test]
+fn test_analytics_multiple_operations() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    // Lock funds in multiple calls
+    client.lock_program_funds(&10_000_0000000);
+    client.lock_program_funds(&15_000_0000000);
+    client.lock_program_funds(&5_000_0000000);
+
+    // Perform payouts
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    client.single_payout(&r1, &5_000_0000000);
+
+    let recipients = vec![&env, r2.clone()];
+    let amounts = vec![&env, 3_000_0000000];
+    client.batch_payout(&recipients, &amounts);
+
+    let stats = client.get_program_aggregate_stats();
+
+    assert_eq!(stats.total_funds, 30_000_0000000i128);
+    assert_eq!(stats.remaining_balance, 22_000_0000000i128);
+    assert_eq!(stats.total_paid_out, 8_000_0000000i128);
+    assert_eq!(stats.payout_count, 2);
+}
+
+// Test: aggregate stats with release schedules
+#[test]
+fn test_analytics_with_schedules() {
+    let env = Env::default();
+    let initial_funds = 100_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    let recipient1 = Address::generate(&env);
+    let recipient2 = Address::generate(&env);
+    let future_timestamp = env.ledger().timestamp() + 1000;
+
+    client.create_program_release_schedule(
+        &recipient1,
+        &20_000_0000000,
+        &future_timestamp,
+    );
+    client.create_program_release_schedule(
+        &recipient2,
+        &30_000_0000000,
+        &(future_timestamp + 100),
+    );
+
+    let stats = client.get_program_aggregate_stats();
+
+    assert_eq!(stats.scheduled_count, 2);
+    assert_eq!(stats.released_count, 0);
+}
+
+// Test: aggregate stats after releasing schedules
+#[test]
+fn test_analytics_after_releasing_schedules() {
+    let env = Env::default();
+    let initial_funds = 100_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    let recipient = Address::generate(&env);
+    let release_timestamp = env.ledger().timestamp() + 50;
+
+    client.create_program_release_schedule(
+        &recipient,
+        &20_000_0000000,
+        &release_timestamp,
+    );
+
+    // Advance time and trigger releases
+    env.ledger().set_timestamp(release_timestamp + 1);
+    client.trigger_program_releases();
+
+    let stats = client.get_program_aggregate_stats();
+
+    assert_eq!(stats.scheduled_count, 1);
+    assert_eq!(stats.released_count, 1);
+    assert_eq!(stats.total_paid_out, 20_000_0000000i128);
+    assert_eq!(stats.remaining_balance, 80_000_0000000i128);
+}
+
+// Test: remaining balance as a health metric
+#[test]
+fn test_health_remaining_balance() {
+    let env = Env::default();
+    let initial_funds = 100_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    // Initial balance
+    let balance1 = client.get_remaining_balance();
+    assert_eq!(balance1, initial_funds);
+
+    // After payout
+    let recipient = Address::generate(&env);
+    client.single_payout(&recipient, &25_000_0000000);
+
+    let balance2 = client.get_remaining_balance();
+    assert_eq!(balance2, 75_000_0000000i128);
+}
+
+// Test: due schedules as a health indicator
+#[test]
+fn test_health_due_schedules() {
+    let env = Env::default();
+    let initial_funds = 100_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    let recipient = Address::generate(&env);
+    let now = env.ledger().timestamp();
+
+    // Create schedule due now
+    client.create_program_release_schedule(
+        &recipient,
+        &10_000_0000000,
+        &now,
+    );
+
+    // Create future schedule
+    let recipient2 = Address::generate(&env);
+    client.create_program_release_schedule(
+        &recipient2,
+        &15_000_0000000,
+        &(now + 1000),
+    );
+
+    // Check due schedules
+    let due = client.get_due_schedules();
+    assert_eq!(due.len(), 1);
+
+    let pending = client.get_pending_schedules();
+    assert_eq!(pending.len(), 2);
+}
+
+// Test: total scheduled amount metric
+#[test]
+fn test_health_total_scheduled_amount() {
+    let env = Env::default();
+    let initial_funds = 100_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    let future_timestamp = env.ledger().timestamp() + 500;
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+
+    client.create_program_release_schedule(&r1, &10_000_0000000, &future_timestamp);
+    client.create_program_release_schedule(&r2, &20_000_0000000, &(future_timestamp + 100));
+    client.create_program_release_schedule(&r3, &15_000_0000000, &(future_timestamp + 200));
+
+    let total_scheduled = client.get_total_scheduled_amount();
+    assert_eq!(total_scheduled, 45_000_0000000i128);
+}
+
+// Test: comprehensive analytics workflow
+#[test]
+fn test_comprehensive_analytics_workflow() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 0);
+
+    // Phase 1: Lock funds
+    client.lock_program_funds(&50_000_0000000);
+    client.lock_program_funds(&50_000_0000000);
+
+    // Phase 2: Direct payouts
+    let r1 = Address::generate(&env);
+    client.single_payout(&r1, &10_000_0000000);
+
+    // Phase 3: Batch payouts
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+    let recipients = vec![&env, r2.clone(), r3.clone()];
+    let amounts = vec![&env, 15_000_0000000, 20_000_0000000];
+    client.batch_payout(&recipients, &amounts);
+
+    // Phase 4: Scheduled releases
+    let future_timestamp = env.ledger().timestamp() + 100;
+    let r4 = Address::generate(&env);
+    client.create_program_release_schedule(&r4, &25_000_0000000, &future_timestamp);
+
+    // Advance time and release
+    env.ledger().set_timestamp(future_timestamp + 1);
+    client.trigger_program_releases();
+
+    // Verify comprehensive stats
+    let stats = client.get_program_aggregate_stats();
+
+    assert_eq!(stats.total_funds, 100_000_0000000i128);
+    assert_eq!(stats.remaining_balance, 20_000_0000000i128);
+    assert_eq!(stats.total_paid_out, 80_000_0000000i128);
+    assert_eq!(stats.payout_count, 3);
+    assert_eq!(stats.scheduled_count, 1);
+    assert_eq!(stats.released_count, 1);
+}
+
+// Test: analytics partial release scenario
+#[test]
+fn test_analytics_partial_release_scenario() {
+    let env = Env::default();
+    let initial_funds = 50_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    let future_timestamp = env.ledger().timestamp() + 50;
+
+    // Create 3 schedules
+    for i in 0..3 {
+        let recipient = Address::generate(&env);
+        client.create_program_release_schedule(
+            &recipient,
+            &10_000_0000000,
+            &(future_timestamp + (i as u64 * 10)),
+        );
+    }
+
+    // Release first two
+    env.ledger().set_timestamp(future_timestamp + 15);
+    client.trigger_program_releases();
+
+    let stats = client.get_program_aggregate_stats();
+
+    assert_eq!(stats.scheduled_count, 3);
+    assert_eq!(stats.released_count, 2);
+    assert_eq!(stats.total_paid_out, 20_000_0000000i128);
+    assert_eq!(stats.remaining_balance, 30_000_0000000i128);
+
+    // Release remaining
+    env.ledger().set_timestamp(future_timestamp + 35);
+    client.trigger_program_releases();
+
+    let stats_final = client.get_program_aggregate_stats();
+
+    assert_eq!(stats_final.scheduled_count, 3);
+    assert_eq!(stats_final.released_count, 3);
+    assert_eq!(stats_final.total_paid_out, 30_000_0000000i128);
+    assert_eq!(stats_final.remaining_balance, 20_000_0000000i128);
+}
+
+// Test: analytics query functions work correctly
+#[test]
+fn test_analytics_query_functions() {
+    let env = Env::default();
+    let initial_funds = 100_000_0000000i128;
+    let (client, _admin, _token, _token_admin) = setup_program(&env, initial_funds);
+
+    // Create payouts to different recipients
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+
+    client.single_payout(&r1, &10_000_0000000);
+    client.single_payout(&r2, &20_000_0000000);
+    client.single_payout(&r3, &15_000_0000000);
+
+    // Query by recipient
+    let payouts_r1 = client.get_payouts_by_recipient(&r1, &0, &10);
+    assert_eq!(payouts_r1.len(), 1);
+    assert_eq!(payouts_r1.get(0).unwrap().amount, 10_000_0000000);
+
+    let payouts_r2 = client.get_payouts_by_recipient(&r2, &0, &10);
+    assert_eq!(payouts_r2.len(), 1);
+    assert_eq!(payouts_r2.get(0).unwrap().amount, 20_000_0000000);
+
+    // Query by amount range
+    let payouts_range = client.query_payouts_by_amount(&12_000_0000000, &18_000_0000000, &0, &10);
+    assert_eq!(payouts_range.len(), 1);
+    assert_eq!(payouts_range.get(0).unwrap().amount, 15_000_0000000);
+}
+
 // =============================================================================
 // BATCH PROGRAM REGISTRATION TESTS
 // =============================================================================
@@ -845,4 +1285,235 @@ fn test_batch_payout_sequential_batches() {
 
     let record3 = data2.payout_history.get(2).unwrap();
     assert_eq!(record3.amount, 4_000_000);
+}
+
+// PROGRAM ESCROW HISTORY QUERY FILTER TESTS 
+// Tests for recipient, amount, timestamp filters + pagination on payout history
+
+#[test]
+fn test_query_payouts_by_recipient_returns_correct_records() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 500_000);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+
+    // Multiple payouts: two to r1, one to r2
+    client.single_payout(&r1, &100_000);
+    client.single_payout(&r2, &150_000);
+    client.single_payout(&r1, &50_000);
+
+    let r1_records = client.query_payouts_by_recipient(&r1, &0, &10);
+    assert_eq!(r1_records.len(), 2);
+    for record in r1_records.iter() {
+        assert_eq!(record.recipient, r1);
+    }
+
+    let r2_records = client.query_payouts_by_recipient(&r2, &0, &10);
+    assert_eq!(r2_records.len(), 1);
+    assert_eq!(r2_records.get(0).unwrap().recipient, r2);
+}
+
+#[test]
+fn test_query_payouts_by_recipient_unknown_returns_empty() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 100_000);
+
+    let r1 = Address::generate(&env);
+    let unknown = Address::generate(&env);
+
+    client.single_payout(&r1, &50_000);
+
+    let results = client.query_payouts_by_recipient(&unknown, &0, &10);
+    assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn test_query_payouts_by_amount_range_returns_matching() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 600_000);
+
+    client.single_payout(&Address::generate(&env), &10_000);
+    client.single_payout(&Address::generate(&env), &50_000);
+    client.single_payout(&Address::generate(&env), &100_000);
+    client.single_payout(&Address::generate(&env), &200_000);
+
+    // Filter: 40_000 to 110_000
+    let results = client.query_payouts_by_amount(&40_000, &110_000, &0, &10);
+    assert_eq!(results.len(), 2);
+    for record in results.iter() {
+        assert!(record.amount >= 40_000 && record.amount <= 110_000);
+    }
+}
+
+#[test]
+fn test_query_payouts_by_amount_exact_boundaries_included() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 600_000);
+
+    client.single_payout(&Address::generate(&env), &100_000);
+    client.single_payout(&Address::generate(&env), &200_000);
+    client.single_payout(&Address::generate(&env), &300_000);
+
+    // Exact boundaries should be included
+    let results = client.query_payouts_by_amount(&100_000, &300_000, &0, &10);
+    assert_eq!(results.len(), 3);
+}
+
+#[test]
+fn test_query_payouts_by_amount_no_results_outside_range() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 200_000);
+
+    client.single_payout(&Address::generate(&env), &50_000);
+    client.single_payout(&Address::generate(&env), &100_000);
+
+    let results = client.query_payouts_by_amount(&500_000, &999_000, &0, &10);
+    assert_eq!(results.len(), 0);
+}
+
+#[test]
+fn test_query_payouts_by_timestamp_range_filters_correctly() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 600_000);
+
+    let base = env.ledger().timestamp();
+
+    env.ledger().set_timestamp(base + 100);
+    client.single_payout(&Address::generate(&env), &100_000);
+
+    env.ledger().set_timestamp(base + 300);
+    client.single_payout(&Address::generate(&env), &100_000);
+
+    env.ledger().set_timestamp(base + 700);
+    client.single_payout(&Address::generate(&env), &100_000);
+
+    env.ledger().set_timestamp(base + 1200);
+    client.single_payout(&Address::generate(&env), &100_000);
+
+    // Filter for timestamps between base+200 and base+800
+    let results = client.query_payouts_by_timestamp(&(base + 200), &(base + 800), &0, &10);
+    assert_eq!(results.len(), 2);
+    for record in results.iter() {
+        assert!(record.timestamp >= base + 200 && record.timestamp <= base + 800);
+    }
+}
+
+#[test]
+fn test_query_payouts_by_timestamp_exact_boundary_included() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 300_000);
+
+    let base = env.ledger().timestamp();
+
+    env.ledger().set_timestamp(base + 100);
+    client.single_payout(&Address::generate(&env), &100_000);
+
+    env.ledger().set_timestamp(base + 200);
+    client.single_payout(&Address::generate(&env), &100_000);
+
+    env.ledger().set_timestamp(base + 300);
+    client.single_payout(&Address::generate(&env), &100_000);
+
+    // Exact boundary should include first and last
+    let results = client.query_payouts_by_timestamp(&(base + 100), &(base + 300), &0, &10);
+    assert_eq!(results.len(), 3);
+}
+
+#[test]
+fn test_query_payouts_pagination_offset_and_limit() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 500_000);
+
+    let r1 = Address::generate(&env);
+    for _ in 0..5 {
+        client.single_payout(&r1, &10_000);
+    }
+
+    // Page 1
+    let page1 = client.query_payouts_by_recipient(&r1, &0, &2);
+    assert_eq!(page1.len(), 2);
+
+    // Page 2
+    let page2 = client.query_payouts_by_recipient(&r1, &2, &2);
+    assert_eq!(page2.len(), 2);
+
+    // Page 3
+    let page3 = client.query_payouts_by_recipient(&r1, &4, &2);
+    assert_eq!(page3.len(), 1);
+}
+
+#[test]
+fn test_query_schedules_by_status_pending_vs_released() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 200_000);
+
+    let now = env.ledger().timestamp();
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let r3 = Address::generate(&env);
+
+    client.create_program_release_schedule(&r1, &50_000, &(now + 100));
+    client.create_program_release_schedule(&r2, &50_000, &(now + 200));
+    client.create_program_release_schedule(&r3, &50_000, &(now + 300));
+
+    // Trigger first two schedules
+    env.ledger().set_timestamp(now + 250);
+    client.trigger_program_releases();
+
+    // Pending (not yet released) = only the third
+    let pending = client.query_schedules_by_status(&false, &0, &10);
+    assert_eq!(pending.len(), 1);
+    assert!(!pending.get(0).unwrap().released);
+
+    // Released = first two
+    let released = client.query_schedules_by_status(&true, &0, &10);
+    assert_eq!(released.len(), 2);
+    for s in released.iter() {
+        assert!(s.released);
+    }
+}
+
+#[test]
+fn test_query_schedules_by_recipient_returns_correct_subset() {
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 300_000);
+
+    let now = env.ledger().timestamp();
+    let winner = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    client.create_program_release_schedule(&winner, &100_000, &(now + 100));
+    client.create_program_release_schedule(&other, &50_000, &(now + 200));
+    client.create_program_release_schedule(&winner, &50_000, &(now + 300));
+
+    let winner_schedules = client.query_schedules_by_recipient(&winner, &0, &10);
+    assert_eq!(winner_schedules.len(), 2);
+    for s in winner_schedules.iter() {
+        assert_eq!(s.recipient, winner);
+    }
+
+    let other_schedules = client.query_schedules_by_recipient(&other, &0, &10);
+    assert_eq!(other_schedules.len(), 1);
+}
+
+#[test]
+fn test_combined_recipient_and_amount_filter_manual() {
+    // Query by recipient, then verify amount subset manually
+    let env = Env::default();
+    let (client, _admin, _token, _token_admin) = setup_program(&env, 500_000);
+
+    let r1 = Address::generate(&env);
+
+    client.single_payout(&r1, &10_000);
+    client.single_payout(&r1, &200_000);
+    client.single_payout(&r1, &50_000);
+
+    // Get r1's records, then filter by amount > 100_000 in test
+    let records = client.query_payouts_by_recipient(&r1, &0, &10);
+    assert_eq!(records.len(), 3);
+
+    let large: Vec<_> = records.iter().filter(|r| r.amount > 100_000).collect();
+    assert_eq!(large.len(), 1);
+    assert_eq!(large[0].amount, 200_000);
 }
