@@ -291,7 +291,7 @@ fn test_release_schedule_exact_timestamp_boundary() {
     let released = client.trigger_program_releases();
     assert_eq!(released, 1);
 
-    let schedules = client.get_program_release_schedules();
+    let schedules = client.get_release_schedules();
     let updated = schedules.get(0).unwrap();
     assert_eq!(updated.schedule_id, schedule.schedule_id);
     assert!(updated.released);
@@ -312,7 +312,7 @@ fn test_release_schedule_just_before_timestamp_rejected() {
     assert_eq!(released, 0);
     assert_eq!(token_client.balance(&recipient), 0);
 
-    let schedules = client.get_program_release_schedules();
+    let schedules = client.get_release_schedules();
     assert!(!schedules.get(0).unwrap().released);
 }
 

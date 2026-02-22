@@ -370,6 +370,7 @@ pub enum Error {
     AmountBelowMinimum = 19,
     /// Returned when lock amount is above the configured policy maximum (Issue #62)
     AmountAboveMaximum = 20,
+    NotPaused = 21,
 }
 
 #[contracttype]
@@ -426,6 +427,8 @@ pub struct PauseFlags {
     pub lock_paused: bool,
     pub release_paused: bool,
     pub refund_paused: bool,
+    pub pause_reason: Option<soroban_sdk::String>,
+    pub paused_at: u64,
 }
 
 #[contracttype]
@@ -445,6 +448,8 @@ pub struct PauseStateChanged {
     pub operation: Symbol,
     pub paused: bool,
     pub admin: Address,
+    pub reason: Option<soroban_sdk::String>,
+    pub timestamp: u64,
 }
 
 #[contracttype]
@@ -640,6 +645,7 @@ impl BountyEscrowContract {
         lock: Option<bool>,
         release: Option<bool>,
         refund: Option<bool>,
+        reason: Option<soroban_sdk::String>,
     ) -> Result<(), Error> {
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::NotInitialized);
@@ -649,6 +655,11 @@ impl BountyEscrowContract {
         admin.require_auth();
 
         let mut flags = Self::get_pause_flags(&env);
+        let timestamp = env.ledger().timestamp();
+        
+        if reason.is_some() {
+            flags.pause_reason = reason.clone();
+        }
 
         if let Some(paused) = lock {
             flags.lock_paused = paused;
@@ -658,6 +669,8 @@ impl BountyEscrowContract {
                     operation: symbol_short!("lock"),
                     paused,
                     admin: admin.clone(),
+                    reason: reason.clone(),
+                    timestamp,
                 },
             );
         }
@@ -670,6 +683,8 @@ impl BountyEscrowContract {
                     operation: symbol_short!("release"),
                     paused,
                     admin: admin.clone(),
+                    reason: reason.clone(),
+                    timestamp,
                 },
             );
         }
@@ -682,11 +697,56 @@ impl BountyEscrowContract {
                     operation: symbol_short!("refund"),
                     paused,
                     admin: admin.clone(),
+                    reason: reason.clone(),
+                    timestamp,
                 },
             );
         }
 
+        let any_paused = flags.lock_paused || flags.release_paused || flags.refund_paused;
+        
+        if any_paused {
+            if flags.paused_at == 0 {
+                flags.paused_at = timestamp;
+            }
+        } else {
+            flags.pause_reason = None;
+            flags.paused_at = 0;
+        }
+
         env.storage().instance().set(&DataKey::PauseFlags, &flags);
+        Ok(())
+    }
+
+    /// Emergency withdraw all funds (admin only, must have lock_paused = true)
+    pub fn emergency_withdraw(env: Env, target: Address) -> Result<(), Error> {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        let flags = Self::get_pause_flags(&env);
+        if !flags.lock_paused {
+            return Err(Error::NotPaused);
+        }
+
+        let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token_client = token::TokenClient::new(&env, &token_address);
+        
+        let contract_address = env.current_contract_address();
+        let balance = token_client.balance(&contract_address);
+        
+        if balance > 0 {
+            token_client.transfer(&contract_address, &target, &balance);
+            events::emit_emergency_withdraw(
+                &env, 
+                events::EmergencyWithdrawEvent {
+                    admin,
+                    recipient: target,
+                    amount: balance,
+                    timestamp: env.ledger().timestamp(),
+                }
+            );
+        }
+
         Ok(())
     }
 
@@ -699,6 +759,8 @@ impl BountyEscrowContract {
                 lock_paused: false,
                 release_paused: false,
                 refund_paused: false,
+                pause_reason: None,
+                paused_at: 0,
             })
     }
 
