@@ -296,7 +296,7 @@ fn test_claim_window_zero_prevents_all_claims() {
 
     setup.escrow.authorize_claim(&bounty_id, &setup.contributor);
 
-    let claim = setup.escrow.get_pending_claim(&bounty_id);
+    let _claim = setup.escrow.get_pending_claim(&bounty_id);
 
     // Advance well past the deadline
     setup.env.ledger().set_timestamp(deadline + 1);

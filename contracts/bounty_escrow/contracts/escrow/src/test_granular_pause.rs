@@ -111,7 +111,7 @@ fn test_set_lock_paused_only() {
     let env = Env::default();
     let (client, _, _, _) = setup(&env, 0);
 
-    client.set_paused(&Some(true), &None, &None);
+    client.set_paused(&Some(true), &None, &None, &None);
     let flags = client.get_pause_flags();
     assert!(flags.lock_paused);
     assert!(!flags.release_paused);
@@ -123,7 +123,7 @@ fn test_set_release_paused_only() {
     let env = Env::default();
     let (client, _, _, _) = setup(&env, 0);
 
-    client.set_paused(&None, &Some(true), &None);
+    client.set_paused(&None, &Some(true), &None, &None);
     let flags = client.get_pause_flags();
     assert!(!flags.lock_paused);
     assert!(flags.release_paused);
@@ -135,7 +135,7 @@ fn test_set_refund_paused_only() {
     let env = Env::default();
     let (client, _, _, _) = setup(&env, 0);
 
-    client.set_paused(&None, &None, &Some(true));
+    client.set_paused(&None, &None, &Some(true), &None);
     let flags = client.get_pause_flags();
     assert!(!flags.lock_paused);
     assert!(!flags.release_paused);
@@ -147,8 +147,8 @@ fn test_unset_lock_paused() {
     let env = Env::default();
     let (client, _, _, _) = setup(&env, 0);
 
-    client.set_paused(&Some(true), &None, &None);
-    client.set_paused(&Some(false), &None, &None);
+    client.set_paused(&Some(true), &None, &None, &None);
+    client.set_paused(&Some(false), &None, &None, &None);
     assert!(!client.get_pause_flags().lock_paused);
 }
 
@@ -157,8 +157,8 @@ fn test_unset_release_paused() {
     let env = Env::default();
     let (client, _, _, _) = setup(&env, 0);
 
-    client.set_paused(&None, &Some(true), &None);
-    client.set_paused(&None, &Some(false), &None);
+    client.set_paused(&None, &Some(true), &None, &None);
+    client.set_paused(&None, &Some(false), &None, &None);
     assert!(!client.get_pause_flags().release_paused);
 }
 
@@ -167,8 +167,8 @@ fn test_unset_refund_paused() {
     let env = Env::default();
     let (client, _, _, _) = setup(&env, 0);
 
-    client.set_paused(&None, &None, &Some(true));
-    client.set_paused(&None, &None, &Some(false));
+    client.set_paused(&None, &None, &Some(true), &None);
+    client.set_paused(&None, &None, &Some(false), &None);
     assert!(!client.get_pause_flags().refund_paused);
 }
 
@@ -181,10 +181,10 @@ fn test_partial_update_preserves_other_flags() {
     let env = Env::default();
     let (client, _, _, _) = setup(&env, 0);
 
-    client.set_paused(&Some(true), &Some(true), &Some(true));
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
 
     // Only unpause release; others stay paused
-    client.set_paused(&None, &Some(false), &None);
+    client.set_paused(&None, &Some(false), &None, &None);
     let flags = client.get_pause_flags();
     assert!(flags.lock_paused);
     assert!(!flags.release_paused);
@@ -200,7 +200,7 @@ fn test_lock_funds_blocked_when_lock_paused() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&Some(true), &None, &None);
+    client.set_paused(&Some(true), &None, &None, &None);
     let deadline = env.ledger().timestamp() + 1_000;
     let result = client.try_lock_funds(&depositor, &1, &100, &deadline);
     assert!(result.is_err());
@@ -211,7 +211,7 @@ fn test_batch_lock_blocked_when_lock_paused() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&Some(true), &None, &None);
+    client.set_paused(&Some(true), &None, &None, &None);
     let deadline = env.ledger().timestamp() + 1_000;
     let items = soroban_sdk::vec![
         &env,
@@ -233,7 +233,7 @@ fn test_release_allowed_when_only_lock_paused() {
     let (client, _, depositor, token) = setup(&env, 1_000);
 
     let _deadline = lock_bounty(&client, &env, &depositor, 1, 500);
-    client.set_paused(&Some(true), &None, &None);
+    client.set_paused(&Some(true), &None, &None, &None);
 
     let contributor = Address::generate(&env);
     client.release_funds(&1, &contributor);
@@ -247,7 +247,7 @@ fn test_refund_allowed_when_only_lock_paused() {
     let (client, _, depositor, token) = setup(&env, 1_000);
 
     let deadline = lock_bounty(&client, &env, &depositor, 1, 300);
-    client.set_paused(&Some(true), &None, &None);
+    client.set_paused(&Some(true), &None, &None, &None);
     env.ledger().set_timestamp(deadline + 1);
 
     let balance_before = token.balance(&depositor);
@@ -265,7 +265,7 @@ fn test_release_funds_blocked_when_release_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&None, &Some(true), &None);
+    client.set_paused(&None, &Some(true), &None, &None);
 
     let contributor = Address::generate(&env);
     let result = client.try_release_funds(&1, &contributor);
@@ -278,7 +278,7 @@ fn test_batch_release_blocked_when_release_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&None, &Some(true), &None);
+    client.set_paused(&None, &Some(true), &None, &None);
 
     let contributor = Address::generate(&env);
     let items = soroban_sdk::vec![
@@ -298,7 +298,7 @@ fn test_lock_allowed_when_only_release_paused() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&None, &Some(true), &None);
+    client.set_paused(&None, &Some(true), &None, &None);
     let deadline = env.ledger().timestamp() + 1_000;
     client.lock_funds(&depositor, &1, &100, &deadline);
 
@@ -313,7 +313,7 @@ fn test_refund_allowed_when_only_release_paused() {
     let (client, _, depositor, token) = setup(&env, 1_000);
 
     let deadline = lock_bounty(&client, &env, &depositor, 1, 400);
-    client.set_paused(&None, &Some(true), &None);
+    client.set_paused(&None, &Some(true), &None, &None);
     env.ledger().set_timestamp(deadline + 1);
 
     let before = token.balance(&depositor);
@@ -331,7 +331,7 @@ fn test_refund_blocked_when_refund_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     let deadline = lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&None, &None, &Some(true));
+    client.set_paused(&None, &None, &Some(true), &None);
     env.ledger().set_timestamp(deadline + 1);
 
     let result = client.try_refund(&1);
@@ -344,7 +344,7 @@ fn test_lock_allowed_when_only_refund_paused() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&None, &None, &Some(true));
+    client.set_paused(&None, &None, &Some(true), &None);
     let deadline = env.ledger().timestamp() + 1_000;
     client.lock_funds(&depositor, &1, &100, &deadline);
 
@@ -359,7 +359,7 @@ fn test_release_allowed_when_only_refund_paused() {
     let (client, _, depositor, token) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 300);
-    client.set_paused(&None, &None, &Some(true));
+    client.set_paused(&None, &None, &Some(true), &None);
 
     let contributor = Address::generate(&env);
     client.release_funds(&1, &contributor);
@@ -375,7 +375,7 @@ fn test_lock_blocked_when_lock_and_release_paused() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&Some(true), &Some(true), &None);
+    client.set_paused(&Some(true), &Some(true), &None, &None);
     let deadline = env.ledger().timestamp() + 1_000;
     assert!(client
         .try_lock_funds(&depositor, &1, &100, &deadline)
@@ -388,7 +388,7 @@ fn test_release_blocked_when_lock_and_release_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&Some(true), &Some(true), &None);
+    client.set_paused(&Some(true), &Some(true), &None, &None);
 
     let contributor = Address::generate(&env);
     assert!(client.try_release_funds(&1, &contributor).is_err());
@@ -401,7 +401,7 @@ fn test_refund_allowed_when_lock_and_release_paused() {
     let (client, _, depositor, token) = setup(&env, 1_000);
 
     let deadline = lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&Some(true), &Some(true), &None);
+    client.set_paused(&Some(true), &Some(true), &None, &None);
     env.ledger().set_timestamp(deadline + 1);
 
     let before = token.balance(&depositor);
@@ -418,7 +418,7 @@ fn test_lock_blocked_when_lock_and_refund_paused() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&Some(true), &None, &Some(true));
+    client.set_paused(&Some(true), &None, &Some(true), &None);
     let deadline = env.ledger().timestamp() + 1_000;
     assert!(client
         .try_lock_funds(&depositor, &1, &100, &deadline)
@@ -431,7 +431,7 @@ fn test_release_allowed_when_lock_and_refund_paused() {
     let (client, _, depositor, token) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 350);
-    client.set_paused(&Some(true), &None, &Some(true));
+    client.set_paused(&Some(true), &None, &Some(true), &None);
 
     let contributor = Address::generate(&env);
     client.release_funds(&1, &contributor);
@@ -444,7 +444,7 @@ fn test_refund_blocked_when_lock_and_refund_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     let deadline = lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&Some(true), &None, &Some(true));
+    client.set_paused(&Some(true), &None, &Some(true), &None);
     env.ledger().set_timestamp(deadline + 1);
 
     assert!(client.try_refund(&1).is_err());
@@ -459,7 +459,7 @@ fn test_lock_allowed_when_release_and_refund_paused() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&None, &Some(true), &Some(true));
+    client.set_paused(&None, &Some(true), &Some(true), &None);
     let deadline = env.ledger().timestamp() + 1_000;
     client.lock_funds(&depositor, &1, &250, &deadline);
 
@@ -473,7 +473,7 @@ fn test_release_blocked_when_release_and_refund_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&None, &Some(true), &Some(true));
+    client.set_paused(&None, &Some(true), &Some(true), &None);
 
     let contributor = Address::generate(&env);
     assert!(client.try_release_funds(&1, &contributor).is_err());
@@ -485,7 +485,7 @@ fn test_refund_blocked_when_release_and_refund_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     let deadline = lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&None, &Some(true), &Some(true));
+    client.set_paused(&None, &Some(true), &Some(true), &None);
     env.ledger().set_timestamp(deadline + 1);
 
     assert!(client.try_refund(&1).is_err());
@@ -500,7 +500,7 @@ fn test_lock_blocked_when_all_paused() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&Some(true), &Some(true), &Some(true));
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
     let deadline = env.ledger().timestamp() + 1_000;
     assert!(client
         .try_lock_funds(&depositor, &1, &100, &deadline)
@@ -513,7 +513,7 @@ fn test_release_blocked_when_all_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&Some(true), &Some(true), &Some(true));
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
 
     let contributor = Address::generate(&env);
     assert!(client.try_release_funds(&1, &contributor).is_err());
@@ -525,7 +525,7 @@ fn test_refund_blocked_when_all_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     let deadline = lock_bounty(&client, &env, &depositor, 1, 200);
-    client.set_paused(&Some(true), &Some(true), &Some(true));
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
     env.ledger().set_timestamp(deadline + 1);
 
     assert!(client.try_refund(&1).is_err());
@@ -540,13 +540,13 @@ fn test_lock_restored_after_unpause() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&Some(true), &None, &None);
+    client.set_paused(&Some(true), &None, &None, &None);
     let deadline = env.ledger().timestamp() + 1_000;
     assert!(client
         .try_lock_funds(&depositor, &1, &100, &deadline)
         .is_err());
 
-    client.set_paused(&Some(false), &None, &None);
+    client.set_paused(&Some(false), &None, &None, &None);
     client.lock_funds(&depositor, &1, &100, &deadline);
     let escrow = client.get_escrow_info(&1);
     assert_eq!(escrow.amount, 100);
@@ -558,12 +558,12 @@ fn test_release_restored_after_unpause() {
     let (client, _, depositor, token) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 300);
-    client.set_paused(&None, &Some(true), &None);
+    client.set_paused(&None, &Some(true), &None, &None);
 
     let contributor = Address::generate(&env);
     assert!(client.try_release_funds(&1, &contributor).is_err());
 
-    client.set_paused(&None, &Some(false), &None);
+    client.set_paused(&None, &Some(false), &None, &None);
     client.release_funds(&1, &contributor);
     assert_eq!(token.balance(&contributor), 300);
 }
@@ -574,12 +574,12 @@ fn test_refund_restored_after_unpause() {
     let (client, _, depositor, token) = setup(&env, 1_000);
 
     let deadline = lock_bounty(&client, &env, &depositor, 1, 400);
-    client.set_paused(&None, &None, &Some(true));
+    client.set_paused(&None, &None, &Some(true), &None);
     env.ledger().set_timestamp(deadline + 1);
 
     assert!(client.try_refund(&1).is_err());
 
-    client.set_paused(&None, &None, &Some(false));
+    client.set_paused(&None, &None, &Some(false), &None);
     let before = token.balance(&depositor);
     client.refund(&1);
     assert_eq!(token.balance(&depositor), before + 400);
@@ -595,7 +595,7 @@ fn test_get_escrow_info_unaffected_when_all_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 500);
-    client.set_paused(&Some(true), &Some(true), &Some(true));
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
 
     let escrow = client.get_escrow_info(&1);
     assert_eq!(escrow.amount, 500);
@@ -607,7 +607,7 @@ fn test_get_balance_unaffected_when_all_paused() {
     let (client, _, depositor, _) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 500);
-    client.set_paused(&Some(true), &Some(true), &Some(true));
+    client.set_paused(&Some(true), &Some(true), &Some(true), &None);
 
     let balance = client.get_balance();
     assert_eq!(balance, 500);
@@ -622,7 +622,7 @@ fn test_batch_lock_allowed_when_release_and_refund_paused() {
     let env = Env::default();
     let (client, _, depositor, _) = setup(&env, 1_000);
 
-    client.set_paused(&None, &Some(true), &Some(true));
+    client.set_paused(&None, &Some(true), &Some(true), &None);
     let deadline = env.ledger().timestamp() + 1_000;
     let items = soroban_sdk::vec![
         &env,
@@ -643,7 +643,7 @@ fn test_batch_release_allowed_when_lock_and_refund_paused() {
     let (client, _, depositor, token) = setup(&env, 1_000);
 
     lock_bounty(&client, &env, &depositor, 1, 250);
-    client.set_paused(&Some(true), &None, &Some(true));
+    client.set_paused(&Some(true), &None, &Some(true), &None);
 
     let contributor = Address::generate(&env);
     let items = soroban_sdk::vec![

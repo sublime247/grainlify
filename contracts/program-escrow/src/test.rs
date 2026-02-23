@@ -291,7 +291,7 @@ fn test_release_schedule_exact_timestamp_boundary() {
     let released = client.trigger_program_releases();
     assert_eq!(released, 1);
 
-    let schedules = client.get_program_release_schedules();
+    let schedules = client.get_release_schedules();
     let updated = schedules.get(0).unwrap();
     assert_eq!(updated.schedule_id, schedule.schedule_id);
     assert!(updated.released);
@@ -312,7 +312,7 @@ fn test_release_schedule_just_before_timestamp_rejected() {
     assert_eq!(released, 0);
     assert_eq!(token_client.balance(&recipient), 0);
 
-    let schedules = client.get_program_release_schedules();
+    let schedules = client.get_release_schedules();
     assert!(!schedules.get(0).unwrap().released);
 }
 
@@ -360,38 +360,215 @@ fn test_release_schedule_overlapping_schedules() {
     assert_eq!(history.len(), 3);
 }
 
+// ---------------------------------------------------------------------------
+// Full program lifecycle integration test with batch payouts across two
+// independent program-escrow instances.
+// ---------------------------------------------------------------------------
+#[test]
+fn test_full_lifecycle_multi_program_batch_payouts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // ── Shared token setup ──────────────────────────────────────────────
+    let token_admin = Address::generate(&env);
+    let token_id = env.register_stellar_asset_contract(token_admin.clone());
+    let token_client = token::Client::new(&env, &token_id);
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_id);
+
+    // ── Program A: "hackathon-alpha" ────────────────────────────────────
+    let contract_a = env.register_contract(None, ProgramEscrowContract);
+    let client_a = ProgramEscrowContractClient::new(&env, &contract_a);
+    let auth_key_a = Address::generate(&env);
+
+    let prog_a = client_a.init_program(
+        &String::from_str(&env, "hackathon-alpha"),
+        &auth_key_a,
+        &token_id,
+    );
+    assert_eq!(prog_a.total_funds, 0);
+    assert_eq!(prog_a.remaining_balance, 0);
+
+    // ── Program B: "hackathon-beta" ─────────────────────────────────────
+    let contract_b = env.register_contract(None, ProgramEscrowContract);
+    let client_b = ProgramEscrowContractClient::new(&env, &contract_b);
+    let auth_key_b = Address::generate(&env);
+
+    let prog_b = client_b.init_program(
+        &String::from_str(&env, "hackathon-beta"),
+        &auth_key_b,
+        &token_id,
+    );
+    assert_eq!(prog_b.total_funds, 0);
+
+    // ── Phase 1: Lock funds in multiple steps ───────────────────────────
+    // Program A receives 500_000 in two tranches
+    token_admin_client.mint(&client_a.address, &300_000);
+    client_a.lock_program_funds(&300_000);
+    assert_eq!(client_a.get_remaining_balance(), 300_000);
+
+    token_admin_client.mint(&client_a.address, &200_000);
+    client_a.lock_program_funds(&200_000);
+    assert_eq!(client_a.get_remaining_balance(), 500_000);
+    assert_eq!(client_a.get_program_info().total_funds, 500_000);
+
+    // Program B receives 400_000 in three tranches
+    token_admin_client.mint(&client_b.address, &150_000);
+    client_b.lock_program_funds(&150_000);
+
+    token_admin_client.mint(&client_b.address, &150_000);
+    client_b.lock_program_funds(&150_000);
+
+    token_admin_client.mint(&client_b.address, &100_000);
+    client_b.lock_program_funds(&100_000);
+    assert_eq!(client_b.get_remaining_balance(), 400_000);
+    assert_eq!(client_b.get_program_info().total_funds, 400_000);
+
+    // ── Phase 2: First round of batch payouts ───────────────────────────
+    let winner_a1 = Address::generate(&env);
+    let winner_a2 = Address::generate(&env);
+    let winner_a3 = Address::generate(&env);
+
+    // Program A — batch payout round 1: 3 winners
+    let data_a1 = client_a.batch_payout(
+        &vec![
+            &env,
+            winner_a1.clone(),
+            winner_a2.clone(),
+            winner_a3.clone(),
+        ],
+        &vec![&env, 100_000, 75_000, 50_000],
+    );
+    assert_eq!(data_a1.remaining_balance, 275_000);
+    assert_eq!(data_a1.payout_history.len(), 3);
+    assert_eq!(token_client.balance(&winner_a1), 100_000);
+    assert_eq!(token_client.balance(&winner_a2), 75_000);
+    assert_eq!(token_client.balance(&winner_a3), 50_000);
+
+    let winner_b1 = Address::generate(&env);
+    let winner_b2 = Address::generate(&env);
+
+    // Program B — batch payout round 1: 2 winners
+    let data_b1 = client_b.batch_payout(
+        &vec![&env, winner_b1.clone(), winner_b2.clone()],
+        &vec![&env, 120_000, 80_000],
+    );
+    assert_eq!(data_b1.remaining_balance, 200_000);
+    assert_eq!(data_b1.payout_history.len(), 2);
+    assert_eq!(token_client.balance(&winner_b1), 120_000);
+    assert_eq!(token_client.balance(&winner_b2), 80_000);
+
+    // ── Phase 3: Second round of batch payouts ──────────────────────────
+    let winner_a4 = Address::generate(&env);
+    let winner_a5 = Address::generate(&env);
+
+    // Program A — batch payout round 2: 2 more winners
+    let data_a2 = client_a.batch_payout(
+        &vec![&env, winner_a4.clone(), winner_a5.clone()],
+        &vec![&env, 125_000, 50_000],
+    );
+    assert_eq!(data_a2.remaining_balance, 100_000);
+    assert_eq!(data_a2.payout_history.len(), 5);
+    assert_eq!(token_client.balance(&winner_a4), 125_000);
+    assert_eq!(token_client.balance(&winner_a5), 50_000);
+
+    let winner_b3 = Address::generate(&env);
+    let winner_b4 = Address::generate(&env);
+    let winner_b5 = Address::generate(&env);
+
+    // Program B — batch payout round 2: 3 more winners
+    let data_b2 = client_b.batch_payout(
+        &vec![
+            &env,
+            winner_b3.clone(),
+            winner_b4.clone(),
+            winner_b5.clone(),
+        ],
+        &vec![&env, 60_000, 40_000, 30_000],
+    );
+    assert_eq!(data_b2.remaining_balance, 70_000);
+    assert_eq!(data_b2.payout_history.len(), 5);
+    assert_eq!(token_client.balance(&winner_b3), 60_000);
+    assert_eq!(token_client.balance(&winner_b4), 40_000);
+    assert_eq!(token_client.balance(&winner_b5), 30_000);
+
+    // ── Phase 4: Final balance verification ─────────────────────────────
+    // Program A: 500_000 locked − (100k + 75k + 50k + 125k + 50k) = 100_000
+    assert_eq!(client_a.get_remaining_balance(), 100_000);
+    assert_eq!(token_client.balance(&client_a.address), 100_000);
+
+    let info_a = client_a.get_program_info();
+    assert_eq!(info_a.total_funds, 500_000);
+    assert_eq!(info_a.remaining_balance, 100_000);
+    assert_eq!(info_a.payout_history.len(), 5);
+
+    // Program B: 400_000 locked − (120k + 80k + 60k + 40k + 30k) = 70_000
+    assert_eq!(client_b.get_remaining_balance(), 70_000);
+    assert_eq!(token_client.balance(&client_b.address), 70_000);
+
+    let info_b = client_b.get_program_info();
+    assert_eq!(info_b.total_funds, 400_000);
+    assert_eq!(info_b.remaining_balance, 70_000);
+    assert_eq!(info_b.payout_history.len(), 5);
+
+    // ── Phase 5: Aggregate stats verification ───────────────────────────
+    let stats_a = client_a.get_program_aggregate_stats();
+    assert_eq!(stats_a.total_funds, 500_000);
+    assert_eq!(stats_a.remaining_balance, 100_000);
+    assert_eq!(stats_a.total_paid_out, 400_000);
+    assert_eq!(stats_a.payout_count, 5);
+
+    let stats_b = client_b.get_program_aggregate_stats();
+    assert_eq!(stats_b.total_funds, 400_000);
+    assert_eq!(stats_b.remaining_balance, 70_000);
+    assert_eq!(stats_b.total_paid_out, 330_000);
+    assert_eq!(stats_b.payout_count, 5);
+
+    // ── Phase 6: Cross-program isolation check ──────────────────────────
+    // Verify programs don't interfere with each other's on-chain balances
+    let total_distributed = (500_000 - 100_000) + (400_000 - 70_000);
+    assert_eq!(total_distributed, 730_000);
+    assert_eq!(
+        token_client.balance(&client_a.address) + token_client.balance(&client_b.address),
+        170_000
+    );
+
+    // ── Phase 7: Event emission verification ────────────────────────────
+    let all_events = env.events().all();
+
+    // At minimum we expect: 2 PrgInit + 5 FndsLock + 4 BatchPay = 11 contract events
+    // (plus token transfer events emitted by the SAC)
+    assert!(
+        all_events.len() >= 11,
+        "Expected at least 11 contract events, got {}",
+        all_events.len()
+    );
+}
+
 #[test]
 fn test_anti_abuse_whitelist_bypass() {
     let env = Env::default();
-    let (contract, admin, _, _) = setup_program(&env);
+    let lock_amount = 100_000_000_000i128;
+    let (client, admin, _token_client, _token_admin) = setup_program(&env, lock_amount);
 
-    let config = contract.get_rate_limit_config(&env);
+    client.set_admin(&admin);
+
+    let config = client.get_rate_limit_config();
     let max_ops = config.max_operations;
     let recipient = Address::generate(&env);
 
-    // Initial time setup
     let start_time = 1_000_000;
     env.ledger().set_timestamp(start_time);
 
-    contract.lock_program_funds(&env, 100_000_000_000);
+    client.set_whitelist(&admin, &true);
 
-    // Add admin to whitelist
-    contract.set_whitelist(&env, admin.clone(), true);
+    env.ledger()
+        .set_timestamp(start_time + config.cooldown_period + 1);
 
-    // Provide a valid timestamp just after the cooldown period
-    env.ledger().set_timestamp(start_time + config.cooldown_period + 1);
-    
-    // We should be able to do theoretically unlimited operations at the exact same timestamp
-    // We'll do `max_ops + 5` to prove it bypasses both cooldown (same timestamp) and rate limit (more than max_ops)
     for _ in 0..(max_ops + 5) {
-        env.as_contract(&contract, || {
-            env.set_invoker(&admin);
-            contract.single_payout(&env, recipient.clone(), 100);
-        });
+        client.single_payout(&recipient, &100);
     }
 
-    // Verify successful payouts
-    let info = contract.get_program_info(&env);
+    let info = client.get_program_info();
     assert_eq!(info.payout_history.len() as u32, max_ops + 5);
 }
 
@@ -402,59 +579,60 @@ fn test_anti_abuse_whitelist_bypass() {
 #[test]
 fn test_batch_initialize_programs_success() {
     let env = Env::default();
-    let contract = ProgramEscrowContract;
+    let contract_id = env.register_contract(None, ProgramEscrowContract);
+    let client = ProgramEscrowContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     let token = Address::generate(&env);
-    let items = vec![
-        &env,
-        ProgramInitItem {
-            program_id: String::from_str(&env, "prog-1"),
-            authorized_payout_key: admin.clone(),
-            token_address: token.clone(),
-        },
-        ProgramInitItem {
-            program_id: String::from_str(&env, "prog-2"),
-            authorized_payout_key: admin.clone(),
-            token_address: token.clone(),
-        },
-    ];
-    let count = contract.batch_initialize_programs(&env, &items).unwrap();
+    let mut items = Vec::new(&env);
+    items.push_back(ProgramInitItem {
+        program_id: String::from_str(&env, "prog-1"),
+        authorized_payout_key: admin.clone(),
+        token_address: token.clone(),
+    });
+    items.push_back(ProgramInitItem {
+        program_id: String::from_str(&env, "prog-2"),
+        authorized_payout_key: admin.clone(),
+        token_address: token.clone(),
+    });
+    let count = client.try_batch_initialize_programs(&items).unwrap().unwrap();
     assert_eq!(count, 2);
-    assert!(contract.program_exists(&env, &String::from_str(&env, "prog-1")));
-    assert!(contract.program_exists(&env, &String::from_str(&env, "prog-2")));
+    assert!(client.program_exists(&String::from_str(&env, "prog-1")));
+    assert!(client.program_exists(&String::from_str(&env, "prog-2")));
 }
 
 #[test]
 fn test_batch_initialize_programs_empty_err() {
     let env = Env::default();
-    let contract = ProgramEscrowContract;
-    let items: Vec<ProgramInitItem> = vec![&env];
-    let res = contract.batch_initialize_programs(&env, &items);
-    assert_eq!(res, Err(BatchError::InvalidBatchSize));
+    let contract_id = env.register_contract(None, ProgramEscrowContract);
+    let client = ProgramEscrowContractClient::new(&env, &contract_id);
+    let items: Vec<ProgramInitItem> = Vec::new(&env);
+    let res = client.try_batch_initialize_programs(&items);
+    assert!(matches!(res, Err(Ok(BatchError::InvalidBatchSize))));
 }
 
 #[test]
 fn test_batch_initialize_programs_duplicate_id_err() {
     let env = Env::default();
-    let contract = ProgramEscrowContract;
+    let contract_id = env.register_contract(None, ProgramEscrowContract);
+    let client = ProgramEscrowContractClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     let token = Address::generate(&env);
     let pid = String::from_str(&env, "same-id");
-    let items = vec![
-        &env,
-        ProgramInitItem {
-            program_id: pid.clone(),
-            authorized_payout_key: admin.clone(),
-            token_address: token.clone(),
-        },
-        ProgramInitItem {
-            program_id: pid,
-            authorized_payout_key: admin.clone(),
-            token_address: token.clone(),
-        },
-    ];
-    let res = contract.batch_initialize_programs(&env, &items);
-    assert_eq!(res, Err(BatchError::DuplicateProgramId));
+    let mut items = Vec::new(&env);
+    items.push_back(ProgramInitItem {
+        program_id: pid.clone(),
+        authorized_payout_key: admin.clone(),
+        token_address: token.clone(),
+    });
+    items.push_back(ProgramInitItem {
+        program_id: pid,
+        authorized_payout_key: admin.clone(),
+        token_address: token.clone(),
+    });
+    let res = client.try_batch_initialize_programs(&items);
+    assert!(matches!(res, Err(Ok(BatchError::DuplicateProgramId))));
+}
+
 // =============================================================================
 // TESTS FOR MULTI-TENANT ISOLATION
 // =============================================================================
@@ -816,6 +994,8 @@ fn test_analytics_query_functions() {
     let payouts_range = client.query_payouts_by_amount(&12_000_0000000, &18_000_0000000, &0, &10);
     assert_eq!(payouts_range.len(), 1);
     assert_eq!(payouts_range.get(0).unwrap().amount, 15_000_0000000);
+}
+
 // =============================================================================
 // BATCH PROGRAM REGISTRATION TESTS
 // =============================================================================

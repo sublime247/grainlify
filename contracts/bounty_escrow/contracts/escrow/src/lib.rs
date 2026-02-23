@@ -2,8 +2,6 @@
 mod events;
 mod invariants;
 
-mod test_bounty_escrow;
-
 #[cfg(test)]
 mod test_rbac;
 
@@ -374,6 +372,7 @@ pub enum Error {
     AmountBelowMinimum = 19,
     /// Returned when lock amount is above the configured policy maximum (Issue #62)
     AmountAboveMaximum = 20,
+    NotPaused = 21,
 }
 
 #[contracttype]
@@ -430,6 +429,8 @@ pub struct PauseFlags {
     pub lock_paused: bool,
     pub release_paused: bool,
     pub refund_paused: bool,
+    pub pause_reason: Option<soroban_sdk::String>,
+    pub paused_at: u64,
 }
 
 #[contracttype]
@@ -449,6 +450,8 @@ pub struct PauseStateChanged {
     pub operation: Symbol,
     pub paused: bool,
     pub admin: Address,
+    pub reason: Option<soroban_sdk::String>,
+    pub timestamp: u64,
 }
 
 #[contracttype]
@@ -644,6 +647,7 @@ impl BountyEscrowContract {
         lock: Option<bool>,
         release: Option<bool>,
         refund: Option<bool>,
+        reason: Option<soroban_sdk::String>,
     ) -> Result<(), Error> {
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::NotInitialized);
@@ -653,6 +657,11 @@ impl BountyEscrowContract {
         admin.require_auth();
 
         let mut flags = Self::get_pause_flags(&env);
+        let timestamp = env.ledger().timestamp();
+
+        if reason.is_some() {
+            flags.pause_reason = reason.clone();
+        }
 
         if let Some(paused) = lock {
             flags.lock_paused = paused;
@@ -662,6 +671,8 @@ impl BountyEscrowContract {
                     operation: symbol_short!("lock"),
                     paused,
                     admin: admin.clone(),
+                    reason: reason.clone(),
+                    timestamp,
                 },
             );
         }
@@ -674,6 +685,8 @@ impl BountyEscrowContract {
                     operation: symbol_short!("release"),
                     paused,
                     admin: admin.clone(),
+                    reason: reason.clone(),
+                    timestamp,
                 },
             );
         }
@@ -686,11 +699,60 @@ impl BountyEscrowContract {
                     operation: symbol_short!("refund"),
                     paused,
                     admin: admin.clone(),
+                    reason: reason.clone(),
+                    timestamp,
                 },
             );
         }
 
+        let any_paused = flags.lock_paused || flags.release_paused || flags.refund_paused;
+
+        if any_paused {
+            if flags.paused_at == 0 {
+                flags.paused_at = timestamp;
+            }
+        } else {
+            flags.pause_reason = None;
+            flags.paused_at = 0;
+        }
+
         env.storage().instance().set(&DataKey::PauseFlags, &flags);
+        Ok(())
+    }
+
+    /// Emergency withdraw all funds (admin only, must have lock_paused = true)
+    pub fn emergency_withdraw(env: Env, target: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        let flags = Self::get_pause_flags(&env);
+        if !flags.lock_paused {
+            return Err(Error::NotPaused);
+        }
+
+        let token_address: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let token_client = token::TokenClient::new(&env, &token_address);
+
+        let contract_address = env.current_contract_address();
+        let balance = token_client.balance(&contract_address);
+
+        if balance > 0 {
+            token_client.transfer(&contract_address, &target, &balance);
+            events::emit_emergency_withdraw(
+                &env,
+                events::EmergencyWithdrawEvent {
+                    admin,
+                    recipient: target,
+                    amount: balance,
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
+        }
+
         Ok(())
     }
 
@@ -703,6 +765,8 @@ impl BountyEscrowContract {
                 lock_paused: false,
                 release_paused: false,
                 refund_paused: false,
+                pause_reason: None,
+                paused_at: 0,
             })
     }
 
@@ -1231,10 +1295,6 @@ impl BountyEscrowContract {
 
         env.storage()
             .persistent()
-            .set(&DataKey::Escrow(bounty_id), &escrow);
-
-        env.storage()
-            .persistent()
             .set(&DataKey::RefundApproval(bounty_id), &approval);
 
         Ok(())
@@ -1337,39 +1397,80 @@ impl BountyEscrowContract {
             .get(&DataKey::Escrow(bounty_id))
             .unwrap();
 
-        if escrow.status != EscrowStatus::Locked {
+        if escrow.status != EscrowStatus::Locked && escrow.status != EscrowStatus::PartiallyRefunded
+        {
             return Err(Error::FundsNotLocked);
         }
 
         let now = env.ledger().timestamp();
-        if now < escrow.deadline {
+        let approval_key = DataKey::RefundApproval(bounty_id);
+        let approval: Option<RefundApproval> = env.storage().persistent().get(&approval_key);
+
+        // Refund is allowed if:
+        // 1. Deadline has passed (returns full amount to depositor)
+        // 2. An administrative approval exists (can be early, partial, and to custom recipient)
+        if now < escrow.deadline && approval.is_none() {
             return Err(Error::DeadlineNotPassed);
+        }
+
+        let (refund_amount, refund_to, is_full) = if let Some(app) = approval.clone() {
+            let full = app.mode == RefundMode::Full || app.amount >= escrow.remaining_amount;
+            (app.amount, app.recipient, full)
+        } else {
+            // Standard refund after deadline
+            (escrow.remaining_amount, escrow.depositor.clone(), true)
+        };
+
+        if refund_amount <= 0 || refund_amount > escrow.remaining_amount {
+            return Err(Error::InvalidAmount);
         }
 
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(&env, &token_addr);
 
-        // Refund only what is still remaining (partial releases may have already gone out)
-        client.transfer(
-            &env.current_contract_address(),
-            &escrow.depositor,
-            &escrow.remaining_amount,
-        );
+        // Transfer the calculated refund amount to the designated recipient
+        client.transfer(&env.current_contract_address(), &refund_to, &refund_amount);
 
         escrow.status = EscrowStatus::Refunded;
         invariants::assert_escrow(&env, &escrow);
+        // Update escrow state: subtract the amount exactly refunded
+        escrow.remaining_amount -= refund_amount;
+        if is_full || escrow.remaining_amount == 0 {
+            escrow.status = EscrowStatus::Refunded;
+        } else {
+            escrow.status = EscrowStatus::PartiallyRefunded;
+        }
+
+        // Add to refund history
+        escrow.refund_history.push_back(RefundRecord {
+            amount: refund_amount,
+            recipient: refund_to.clone(),
+            timestamp: now,
+            mode: if is_full {
+                RefundMode::Full
+            } else {
+                RefundMode::Partial
+            },
+        });
+
+        // Save updated escrow
         env.storage()
             .persistent()
             .set(&DataKey::Escrow(bounty_id), &escrow);
+
+        // Remove approval after successful execution
+        if approval.is_some() {
+            env.storage().persistent().remove(&approval_key);
+        }
 
         emit_funds_refunded(
             &env,
             FundsRefunded {
                 version: EVENT_VERSION_V2,
                 bounty_id,
-                amount: escrow.remaining_amount,
-                refund_to: escrow.depositor,
-                timestamp: env.ledger().timestamp(),
+                amount: refund_amount,
+                refund_to: refund_to.clone(),
+                timestamp: now,
             },
         );
 
@@ -2055,6 +2156,8 @@ mod test_analytics_monitoring;
 #[cfg(test)]
 mod test_auto_refund_permissions;
 #[cfg(test)]
+mod test_bounty_escrow;
+#[cfg(test)]
 mod test_dispute_resolution;
 mod test_expiration_and_dispute;
 #[cfg(test)]
@@ -2063,6 +2166,7 @@ mod test_front_running_ordering;
 mod test_granular_pause;
 #[cfg(test)]
 mod test_invariants;
+mod test_lifecycle;
 #[cfg(test)]
 mod test_pause;
 #[cfg(test)]

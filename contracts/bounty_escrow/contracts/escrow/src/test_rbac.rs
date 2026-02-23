@@ -3,7 +3,7 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
-    token, vec, Address, Env, String,
+    token, Address, Env,
 };
 
 struct RbacSetup<'a> {
@@ -64,7 +64,7 @@ fn test_admin_contract_permissions() {
     // mock_all_auths is already active from setup
 
     // Admin should be able to pause
-    setup.client.set_paused(&Some(true), &None, &None);
+    setup.client.set_paused(&Some(true), &None, &None, &None);
     assert!(setup.client.get_pause_flags().lock_paused);
 
     // Admin should be able to update fee config
@@ -120,7 +120,7 @@ fn test_random_cannot_pause() {
     let contract_id2 = env2.register_contract(None, BountyEscrowContract);
     let client2 = BountyEscrowContractClient::new(&env2, &contract_id2);
     // This should panic because no auth is mocked and admin hasn't been set
-    client2.set_paused(&Some(true), &None, &None);
+    client2.set_paused(&Some(true), &None, &None, &None);
 }
 
 // ─────────────────────────────────────────────────────────
