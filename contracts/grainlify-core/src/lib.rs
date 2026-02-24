@@ -615,7 +615,9 @@ impl GrainlifyContract {
 
         // Store chain and network identifiers
         env.storage().instance().set(&DataKey::ChainId, &chain_id);
-        env.storage().instance().set(&DataKey::NetworkId, &network_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::NetworkId, &network_id);
 
         // Track successful operation
         monitoring::track_operation(&env, symbol_short!("init_net"), admin, true);
@@ -1529,16 +1531,16 @@ mod test {
         let admin = Address::generate(&env);
         let chain_id = String::from_str(&env, "stellar");
         let network_id = String::from_str(&env, "testnet");
-        
+
         client.init_with_network(&admin, &chain_id, &network_id);
 
         // Verify initialization
         assert_eq!(client.get_version(), 2);
-        
+
         // Verify network configuration
         let retrieved_chain = client.get_chain_id();
         let retrieved_network = client.get_network_id();
-        
+
         assert_eq!(retrieved_chain, Some(chain_id));
         assert_eq!(retrieved_network, Some(network_id));
     }
@@ -1554,7 +1556,7 @@ mod test {
         let admin = Address::generate(&env);
         let chain_id = String::from_str(&env, "ethereum");
         let network_id = String::from_str(&env, "mainnet");
-        
+
         client.init_with_network(&admin, &chain_id, &network_id);
 
         // Test tuple getter
@@ -1579,7 +1581,7 @@ mod test {
 
         // First initialization should succeed
         client.init_with_network(&admin1, &chain_id, &network_id);
-        
+
         // Second initialization should panic
         client.init_with_network(&admin2, &chain_id, &network_id);
     }
@@ -1593,10 +1595,10 @@ mod test {
         let client = GrainlifyContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        
+
         // Legacy init should still work (without network config)
         client.init_admin(&admin);
-        
+
         // Network info should be None for legacy initialization
         assert_eq!(client.get_chain_id(), None);
         assert_eq!(client.get_network_id(), None);

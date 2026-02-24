@@ -11,9 +11,9 @@ pub mod token_math;
 mod reentrancy_guard;
 mod test_cross_contract_interface;
 #[cfg(test)]
-mod test_rbac;
-#[cfg(test)]
 mod test_multi_token_fees;
+#[cfg(test)]
+mod test_rbac;
 mod traits;
 
 use events::{
@@ -453,10 +453,10 @@ pub enum DataKey {
     AmountPolicy, // Option<(i128, i128)> — (min_amount, max_amount) set by set_amount_policy
     CapabilityNonce, // monotonically increasing capability id
     Capability(u64), // capability_id -> Capability
-    
+
     /// Chain identifier (e.g., "stellar", "ethereum") for cross-network protection
     ChainId,
-    
+
     /// Network identifier (e.g., "mainnet", "testnet", "futurenet") for environment-specific behavior
     NetworkId,
 }
@@ -684,19 +684,21 @@ impl BountyEscrowContract {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
-        
+
         let normalized_token =
             asset::normalize_asset_id(&env, &token).map_err(|_| Error::InvalidAssetId)?;
-        
+
         // Store admin and token
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
             .set(&DataKey::Token, &normalized_token);
-        
+
         // Store chain and network identifiers
         env.storage().instance().set(&DataKey::ChainId, &chain_id);
-        env.storage().instance().set(&DataKey::NetworkId, &network_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::NetworkId, &network_id);
 
         emit_bounty_initialized(
             &env,
