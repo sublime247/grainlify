@@ -2297,6 +2297,8 @@ mod test_lifecycle;
 #[cfg(test)]
 mod test_metadata_tagging;
 #[cfg(test)]
+mod test_partial_payout_rounding;
+#[cfg(test)]
 mod test_pause;
 #[cfg(test)]
 mod escrow_status_transition_tests {
