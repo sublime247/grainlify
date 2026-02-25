@@ -3,7 +3,7 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Ledger, LedgerInfo},
-    Address, Env, String,
+    Address, Env, String, IntoVal
 };
 
 // ============================================================================
