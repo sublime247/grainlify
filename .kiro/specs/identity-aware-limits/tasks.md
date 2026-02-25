@@ -243,12 +243,12 @@
     - **Validates: Requirements 8.3**
 
 - [ ] 12. Implement off-chain helper module in Go
-  - [ ] 12.1 Create identity claims package structure
+  - [x] 12.1 Create identity claims package structure
     - Create backend/internal/identity/claims.go
     - Define IdentityClaim and IdentityTier types
     - _Requirements: 9.1_
 
-  - [ ] 12.2 Implement CreateClaim function
+  - [x] 12.2 Implement CreateClaim function
     - Generate claim with address, tier, risk score, and expiry
     - Validate input parameters
     - _Requirements: 9.1_
@@ -257,7 +257,7 @@
     - **Property 30: Off-chain helper generates valid claim structure**
     - **Validates: Requirements 9.1**
 
-  - [ ] 12.3 Implement SerializeClaim function
+  - [x] 12.3 Implement SerializeClaim function
     - Use same XDR encoding as on-chain contract
     - Ensure deterministic byte ordering
     - _Requirements: 9.4_
@@ -266,7 +266,7 @@
     - **Property 33: Off-chain and on-chain serialization consistency**
     - **Validates: Requirements 9.4**
 
-  - [ ] 12.5 Implement SignClaim function
+  - [x] 12.5 Implement SignClaim function
     - Sign serialized claim with Ed25519 private key
     - Return 64-byte signature
     - _Requirements: 9.2_
@@ -275,7 +275,7 @@
     - **Property 31: Off-chain signature is on-chain compatible**
     - **Validates: Requirements 9.2**
 
-  - [ ] 12.7 Implement VerifyClaim function
+  - [x] 12.7 Implement VerifyClaim function
     - Verify signature using Ed25519 public key
     - Use same logic as on-chain verification
     - _Requirements: 9.3_
@@ -284,7 +284,7 @@
     - **Property 32: Off-chain and on-chain verification consistency**
     - **Validates: Requirements 9.3**
 
-  - [ ] 12.9 Create test utilities for claim generation
+  - [x] 12.9 Create test utilities for claim generation
     - Implement helper to generate test claims with valid signatures
     - Provide utilities for different tiers and risk scores
     - _Requirements: 9.5_
