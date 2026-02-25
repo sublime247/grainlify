@@ -26,6 +26,7 @@ fn test_error_codes_are_stable() {
     // This test documents the expected error code numbers.
     // If this test fails, you've changed error codes which is BREAKING.
     
+
     assert_eq!(Error::AlreadyInitialized as u32, 1);
     assert_eq!(Error::NotInitialized as u32, 2);
     assert_eq!(Error::BountyExists as u32, 3);
@@ -73,6 +74,7 @@ fn test_core_function_signatures_stable() {
     client.lock_funds(&depositor, &1, &1000, &100);
     client.release_funds(&1, &contributor);
     
+
     // Query functions
     let _ = client.get_escrow_info(&1);
     let _ = client.get_balance();
@@ -103,6 +105,11 @@ fn test_storage_keys_accessible() {
     let escrow = client.get_escrow_info(&1);
     assert_eq!(escrow.amount, 1000);
     
+
+    // Verify we can still access stored data
+    let escrow = client.get_escrow_info(&1);
+    assert_eq!(escrow.amount, 1000);
+
     let balance = client.get_balance();
     assert_eq!(balance, 1000);
 }
@@ -129,6 +136,7 @@ fn test_old_client_compatibility() {
     client.lock_funds(&depositor, &1, &1000, &100);
     client.release_funds(&1, &contributor);
     
+
     // Old client code should work without errors
     let escrow = client.get_escrow_info(&1);
     assert_eq!(escrow.status, crate::EscrowStatus::Released);
