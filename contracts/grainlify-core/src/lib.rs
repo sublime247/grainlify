@@ -442,7 +442,6 @@ pub struct CoreConfigSnapshot {
     pub admin: Option<Address>,
     pub version: u32,
     pub previous_version: Option<u32>,
-    pub multisig_config: Option<MultiSigConfig>,
 }
 
 // ============================================================================
@@ -958,7 +957,6 @@ impl GrainlifyContract {
             admin: env.storage().instance().get(&DataKey::Admin),
             version: env.storage().instance().get(&DataKey::Version).unwrap_or(0),
             previous_version: env.storage().instance().get(&DataKey::PreviousVersion),
-            multisig_config: MultiSig::get_config_opt(&env),
         };
 
         env.storage()
@@ -1066,11 +1064,6 @@ impl GrainlifyContract {
                 .instance()
                 .set(&DataKey::PreviousVersion, &prev),
             None => env.storage().instance().remove(&DataKey::PreviousVersion),
-        }
-
-        match snapshot.multisig_config {
-            Some(config) => MultiSig::set_config(&env, config),
-            None => MultiSig::clear_config(&env),
         }
 
         env.events().publish(
