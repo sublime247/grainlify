@@ -90,11 +90,13 @@ impl TestContext {
 
     fn get_contract_balance(&self) -> i128 {
         let token_client = token::Client::new(&self.env, &self.token);
-        let contract_address = self.env.current_contract_address();
-        token_client.balance(&contract_address)
+        token_client.balance(&self.client.address)
     }
 
     fn capture_state_snapshot(&self) -> StateSnapshot {
+        let admin = self.env.as_contract(&self.client.address, || {
+            self.env.storage().instance().get(&DataKey::Admin).unwrap()
+        });
         StateSnapshot {
             pause_flags: self.client.get_pause_flags(),
             contract_balance: self.get_contract_balance(),
@@ -153,7 +155,9 @@ fn test_e2e_pause_upgrade_resume_with_funds() {
         "Balance should be preserved"
     );
 
-    let admin_after: Address = ctx.env.storage().instance().get(&DataKey::Admin).unwrap();
+    let admin_after: Address = ctx.env.as_contract(&ctx.client.address, || {
+        ctx.env.storage().instance().get(&DataKey::Admin).unwrap()
+    });
     assert_eq!(snapshot.admin, admin_after, "Admin should be preserved");
 
     // Step 6: Resume operations
@@ -194,7 +198,7 @@ fn test_e2e_pause_prevents_operations_during_upgrade() {
 
     // Attempt to release funds (should fail)
     let release_result = ctx.client.try_release_funds(&1, &ctx.contributor);
-    assert!(release_result.is_err());
+    assert_eq!(release_result, Err(Ok(Error::FundsPaused)));
 }
 
 // ============================================================================
@@ -207,7 +211,7 @@ fn test_e2e_upgrade_with_multiple_bounties() {
     let ctx = TestContext::new();
 
     // Lock multiple bounties
-    let bounties = [(1u64, 10_000i128), (2u64, 20_000i128), (3u64, 15_000i128)];
+    let bounties = std::vec![(1u64, 10_000i128), (2u64, 20_000i128), (3u64, 15_000i128)];
 
     let mut total_locked = 0i128;
     for (bounty_id, amount) in &bounties {
@@ -312,7 +316,9 @@ fn test_e2e_upgrade_rollback_preserves_state() {
     let balance_after = ctx.get_contract_balance();
     assert_eq!(snapshot_before.contract_balance, balance_after);
 
-    let admin_after: Address = ctx.env.storage().instance().get(&DataKey::Admin).unwrap();
+    let admin_after: Address = ctx.env.as_contract(&ctx.client.address, || {
+        ctx.env.storage().instance().get(&DataKey::Admin).unwrap()
+    });
     assert_eq!(snapshot_before.admin, admin_after);
 
     // Verify bounties intact
@@ -485,7 +491,8 @@ fn test_e2e_upgrade_with_high_value_bounties() {
     let high_value = 1_000_000_000i128; // 1 billion units
 
     // Mint enough tokens
-    ctx.token_sac.mint(&ctx.depositor, &(high_value * 3));
+    let token_admin_client = token::StellarAssetClient::new(&ctx.env, &ctx.token);
+    token_admin_client.mint(&ctx.depositor, &(high_value * 3));
 
     ctx.lock_bounty(1, high_value);
     ctx.lock_bounty(2, high_value);

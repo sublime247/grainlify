@@ -351,7 +351,7 @@ mod anti_abuse {
         {
             // New window: start at 1 (safe)
             state.window_start_timestamp = now;
-            state.operation_count = 0u32.checked_add(1).unwrap();
+            state.operation_count = 0_u32.checked_add(1).unwrap();
         } else {
             // Same window
             if state.operation_count >= config.max_operations {
@@ -398,6 +398,8 @@ pub enum Error {
     InvalidAmount = 13,
     /// Returned when deadline is invalid (in the past or too far in the future)
     InvalidDeadline = 14,
+    /// Reserved for future use (keeps error code sequence contiguous for indexers)
+    Reserved = 15,
     /// Returned when contract has insufficient funds for the operation
     InsufficientFunds = 16,
     /// Returned when refund is attempted without admin approval
@@ -2585,13 +2587,6 @@ impl BountyEscrowContract {
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(&env, &token_addr);
 
-        // Transfer only the requested partial amount to the contributor
-        client.transfer(
-            &env.current_contract_address(),
-            &contributor,
-            &payout_amount,
-        );
-
         // Decrement remaining; this is always an exact integer subtraction — no rounding
         escrow.remaining_amount = escrow.remaining_amount.checked_sub(payout_amount).unwrap();
 
@@ -2607,6 +2602,16 @@ impl BountyEscrowContract {
             .persistent()
             .set(&DataKey::Escrow(bounty_id), &escrow);
 
+
+        // INTERACTION: external token transfer is last (CEI pattern)
+        client.transfer(
+            &env.current_contract_address(),
+            &contributor,
+            &payout_amount,
+        );
+
+
+     
         // INTERACTION: external token transfer is last (single transfer; state already updated above)
         events::emit_funds_released(
             &env,
@@ -3811,7 +3816,12 @@ impl BountyEscrowContract {
         emit_batch_funds_locked(
             &env,
             BatchFundsLocked {
+                version: EVENT_VERSION_V2,
                 count: locked_count,
+                total_amount: items
+                    .iter()
+                    .try_fold(0i128, |acc, i| acc.checked_add(i.amount))
+                    .unwrap(),
                 total_amount,
                 timestamp,
             },
@@ -3973,6 +3983,7 @@ impl BountyEscrowContract {
         emit_batch_funds_released(
             &env,
             BatchFundsReleased {
+                version: EVENT_VERSION_V2,
                 count: released_count,
                 total_amount,
                 timestamp,
