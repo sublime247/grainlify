@@ -610,7 +610,6 @@ impl BountyEscrowContract {
         emit_bounty_initialized(
             &env,
             BountyEscrowInitialized {
- 
                 version: EVENT_VERSION_V2,
                 admin,
                 token,
@@ -694,7 +693,6 @@ impl BountyEscrowContract {
         events::emit_fee_config_updated(
             &env,
             events::FeeConfigUpdated {
-                
                 lock_fee_rate: fee_config.lock_fee_rate,
                 release_fee_rate: fee_config.release_fee_rate,
                 fee_recipient: fee_config.fee_recipient.clone(),
@@ -747,7 +745,6 @@ impl BountyEscrowContract {
             events::emit_pause_state_changed(
                 &env,
                 PauseStateChanged {
-                   
                     operation: symbol_short!("release"),
                     paused,
                     admin: admin.clone(),
@@ -811,7 +808,6 @@ impl BountyEscrowContract {
             events::emit_emergency_withdraw(
                 &env,
                 events::EmergencyWithdrawEvent {
-                     
                     admin,
                     recipient: target,
                     amount: balance,
@@ -1071,7 +1067,6 @@ impl BountyEscrowContract {
         events::emit_capability_used(
             env,
             events::CapabilityUsed {
-                
                 capability_id,
                 holder: holder.clone(),
                 action: capability.action.clone(),
@@ -1165,7 +1160,6 @@ impl BountyEscrowContract {
         events::emit_capability_revoked(
             &env,
             events::CapabilityRevoked {
-                 
                 capability_id,
                 owner,
                 revoked_at: env.ledger().timestamp(),
@@ -1277,7 +1271,6 @@ impl BountyEscrowContract {
         events::emit_approval_added(
             &env,
             events::ApprovalAdded {
-                
                 bounty_id,
                 contributor: contributor.clone(),
                 approver,
@@ -1380,7 +1373,6 @@ impl BountyEscrowContract {
         emit_funds_locked(
             &env,
             FundsLocked {
-                
                 version: EVENT_VERSION_V2,
                 bounty_id,
                 amount,
@@ -1448,7 +1440,6 @@ impl BountyEscrowContract {
         emit_funds_released(
             &env,
             FundsReleased {
-               
                 version: EVENT_VERSION_V2,
                 bounty_id,
                 amount: escrow.amount,
