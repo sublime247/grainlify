@@ -152,10 +152,10 @@
 
 #![no_std]
 
+pub mod asset;
 mod commit_reveal;
 mod governance;
 mod multisig;
-pub mod asset;
 pub use commit_reveal::{create_commitment, verify_reveal, Commitment, Error as CommitRevealError};
 pub use governance::{
     Error as GovError, GovernanceConfig, Proposal, ProposalStatus, Vote, VoteType, VotingScheme,
@@ -1903,4 +1903,3 @@ mod test {
 
 // #[cfg(test)]
 // mod migration_hook_tests;
-

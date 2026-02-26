@@ -71,8 +71,7 @@ fn test_renew_escrow_extends_deadline() {
 
     // Renew with extended deadline, no additional funds
     let new_deadline = initial_deadline + 2_000;
-    s.escrow
-        .renew_escrow(&bounty_id, &new_deadline, &0_i128);
+    s.escrow.renew_escrow(&bounty_id, &new_deadline, &0_i128);
 
     let escrow = s.escrow.get_escrow_info(&bounty_id);
     assert_eq!(escrow.deadline, new_deadline);
@@ -92,8 +91,7 @@ fn test_renew_escrow_with_topup() {
 
     let new_deadline = initial_deadline + 2_000;
     let topup = 3_000_i128;
-    s.escrow
-        .renew_escrow(&bounty_id, &new_deadline, &topup);
+    s.escrow.renew_escrow(&bounty_id, &new_deadline, &topup);
 
     let escrow = s.escrow.get_escrow_info(&bounty_id);
     assert_eq!(escrow.deadline, new_deadline);
@@ -146,8 +144,7 @@ fn test_renew_released_escrow_fails() {
     s.escrow.release_funds(&bounty_id, &s.contributor);
 
     // Should fail: escrow is Released
-    s.escrow
-        .renew_escrow(&bounty_id, &(deadline + 1_000), &0);
+    s.escrow.renew_escrow(&bounty_id, &(deadline + 1_000), &0);
 }
 
 #[test]
@@ -165,8 +162,7 @@ fn test_renew_refunded_escrow_fails() {
     s.escrow.refund(&bounty_id);
 
     // Should fail: escrow is Refunded
-    s.escrow
-        .renew_escrow(&bounty_id, &(deadline + 5_000), &0);
+    s.escrow.renew_escrow(&bounty_id, &(deadline + 5_000), &0);
 }
 
 #[test]

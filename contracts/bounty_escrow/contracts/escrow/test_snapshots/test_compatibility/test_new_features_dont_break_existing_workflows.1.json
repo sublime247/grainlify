@@ -234,7 +234,8 @@
         {
           "contract_data": {
             "contract": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM",
-            "key": {               "symbol": "op_count"
+            "key": {
+              "symbol": "op_count"
             },
             "durability": "persistent"
           }

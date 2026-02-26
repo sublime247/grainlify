@@ -490,8 +490,8 @@ pub enum DataKey {
     PauseFlags,                  // PauseFlags struct
     AmountPolicy, // Option<(i128, i128)> — (min_amount, max_amount) set by set_amount_policy
     PromotionalPeriod(u64), // id -> PromotionalPeriod
-    ActivePromotions,       // Vec<u64> of active promotion IDs
-    PromotionCounter,       // u64 counter for generating promotion IDs
+    ActivePromotions, // Vec<u64> of active promotion IDs
+    PromotionCounter, // u64 counter for generating promotion IDs
     ClaimTicket(u64), // ticket_id -> ClaimTicket
     ClaimTicketIndex, // Vec<u64> of all ticket_ids
     TicketCounter, // u64 counter for generating unique ticket_ids
@@ -604,10 +604,10 @@ pub struct PromotionalPeriod {
     pub name: soroban_sdk::String,
     pub start_time: u64,
     pub end_time: u64,
-    pub lock_fee_rate: i128,      // Promotional lock fee rate (can be 0 for free)
-    pub release_fee_rate: i128,   // Promotional release fee rate (can be 0 for free)
-    pub is_global: bool,          // If true, applies to all operations
-    pub enabled: bool,            // Can be disabled without deleting
+    pub lock_fee_rate: i128, // Promotional lock fee rate (can be 0 for free)
+    pub release_fee_rate: i128, // Promotional release fee rate (can be 0 for free)
+    pub is_global: bool,     // If true, applies to all operations
+    pub enabled: bool,       // Can be disabled without deleting
 }
 
 #[contracttype]
@@ -2641,7 +2641,6 @@ impl BountyEscrowContract {
             .persistent()
             .set(&DataKey::Escrow(bounty_id), &escrow);
 
-
         // INTERACTION: external token transfer is last (CEI pattern)
         client.transfer(
             &env.current_contract_address(),
@@ -2649,8 +2648,6 @@ impl BountyEscrowContract {
             &payout_amount,
         );
 
-
-     
         // INTERACTION: external token transfer is last (single transfer; state already updated above)
         events::emit_funds_released(
             &env,
@@ -4463,8 +4460,7 @@ impl BountyEscrowContract {
             .ok_or(Error::BountyNotFound)?;
 
         // Only Locked or PartiallyRefunded escrows can be renewed
-        if escrow.status != EscrowStatus::Locked
-            && escrow.status != EscrowStatus::PartiallyRefunded
+        if escrow.status != EscrowStatus::Locked && escrow.status != EscrowStatus::PartiallyRefunded
         {
             return Err(Error::RenewalNotAllowed);
         }
@@ -4493,8 +4489,7 @@ impl BountyEscrowContract {
             // Depositor must authorize the top-up transfer
             escrow.depositor.require_auth();
 
-            let token_addr: Address =
-                env.storage().instance().get(&DataKey::Token).unwrap();
+            let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
             let client = token::Client::new(&env, &token_addr);
             client.transfer(
                 &escrow.depositor,
@@ -4754,11 +4749,7 @@ impl BountyEscrowContract {
     /// Returns the CycleLink if the escrow has been part of a renewal chain,
     /// or an error if the escrow is not found.
     pub fn get_cycle_info(env: Env, bounty_id: u64) -> Result<CycleLink, Error> {
-        if !env
-            .storage()
-            .persistent()
-            .has(&DataKey::Escrow(bounty_id))
-        {
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
             return Err(Error::BountyNotFound);
         }
 
@@ -4776,11 +4767,7 @@ impl BountyEscrowContract {
 
     /// View: get the renewal history for an escrow.
     pub fn get_renewal_history(env: Env, bounty_id: u64) -> Result<Vec<RenewalRecord>, Error> {
-        if !env
-            .storage()
-            .persistent()
-            .has(&DataKey::Escrow(bounty_id))
-        {
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
             return Err(Error::BountyNotFound);
         }
 
@@ -5305,6 +5292,6 @@ mod test_e2e_upgrade_with_pause;
 #[cfg(test)]
 mod test_query_filters;
 #[cfg(test)]
-mod test_status_transitions;
-#[cfg(test)]
 mod test_renew_rollover;
+#[cfg(test)]
+mod test_status_transitions;

@@ -18,7 +18,7 @@ pub enum Error {
 }
 
 /// Creates a new commitment.
-/// 
+///
 /// # Arguments
 /// * `env` - The environment
 /// * `creator` - The address creating the commitment
@@ -39,13 +39,13 @@ pub fn create_commitment(
 }
 
 /// Verifies a reveal against a commitment.
-/// 
+///
 /// # Arguments
 /// * `env` - The environment
 /// * `commitment` - The stored commitment
 /// * `value` - The revealed value (as Bytes)
 /// * `salt` - The revealed salt (as Bytes)
-/// 
+///
 /// # Returns
 /// * `Result<(), Error>` - Ok if reveal matches, error otherwise
 pub fn verify_reveal(
@@ -82,17 +82,17 @@ mod test {
     fn test_commit_reveal_success() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let value = Bytes::from_array(&env, &[1, 2, 3]);
         let salt = Bytes::from_array(&env, &[4, 5, 6]);
-        
+
         // Prepare hash
         let mut data = value.clone();
         data.append(&salt);
         let hash: BytesN<32> = env.crypto().sha256(&data).into();
-        
+
         let commitment = create_commitment(&env, creator.clone(), hash, None);
-        
+
         let result = verify_reveal(&env, &commitment, value, salt);
         assert!(result.is_ok());
     }
@@ -101,16 +101,16 @@ mod test {
     fn test_commit_reveal_mismatch() {
         let env = Env::default();
         let creator = Address::generate(&env);
-        
+
         let value = Bytes::from_array(&env, &[1, 2, 3]);
         let salt = Bytes::from_array(&env, &[4, 5, 6]);
-        
+
         let mut data = value.clone();
         data.append(&salt);
         let hash: BytesN<32> = env.crypto().sha256(&data).into();
-        
+
         let commitment = create_commitment(&env, creator.clone(), hash, None);
-        
+
         // Try reveal with wrong value
         let wrong_value = Bytes::from_array(&env, &[9, 9, 9]);
         let result = verify_reveal(&env, &commitment, wrong_value, salt);
@@ -122,20 +122,20 @@ mod test {
         let env = Env::default();
         env.ledger().with_mut(|li| li.timestamp = 1000);
         let creator = Address::generate(&env);
-        
+
         let value = Bytes::from_array(&env, &[1, 2, 3]);
         let salt = Bytes::from_array(&env, &[4, 5, 6]);
-        
+
         let mut data = value.clone();
         data.append(&salt);
         let hash: BytesN<32> = env.crypto().sha256(&data).into();
-        
+
         // Expire at 1100
         let commitment = create_commitment(&env, creator.clone(), hash, Some(1100));
-        
+
         // Fast forward to 1200
         env.ledger().with_mut(|li| li.timestamp = 1200);
-        
+
         let result = verify_reveal(&env, &commitment, value, salt);
         assert_eq!(result, Err(Error::CommitmentExpired));
     }
