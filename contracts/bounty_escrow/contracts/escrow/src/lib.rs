@@ -17,6 +17,7 @@ mod test_rbac;
 #[cfg(test)]
 mod test_risk_flags;
 mod traits;
+pub mod upgrade_safety;
 
 #[cfg(test)]
 mod test_maintenance_mode;
@@ -534,6 +535,8 @@ pub enum Error {
     /// Use get_escrow_info_v2 for anonymous escrows
     UseGetEscrowInfoV2ForAnonymous = 37,
     InvalidSelectionInput = 42,
+    /// Returned when an upgrade safety pre-check fails
+    UpgradeSafetyCheckFailed = 43,
 }
 
 pub const RISK_FLAG_HIGH_RISK: u32 = 1 << 0;
@@ -872,6 +875,18 @@ pub struct ReleaseFundsItem {
     pub contributor: Address,
 }
 
+/// Result of a dry-run simulation. Indicates whether the operation would succeed
+/// and the resulting state without mutating storage or performing transfers.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SimulationResult {
+    pub success: bool,
+    pub error_code: u32,
+    pub amount: i128,
+    pub resulting_status: EscrowStatus,
+    pub remaining_amount: i128,
+}
+
 #[contract]
 pub struct BountyEscrowContract;
 
@@ -1084,7 +1099,17 @@ impl BountyEscrowContract {
         Ok(())
     }
 
-    /// Update pause flags (admin only)
+    /// Updates the granular pause state and metadata for the contract.
+    ///
+    /// # Arguments
+    /// * `lock` - If Some(true), prevents new escrows from being created.
+    /// * `release` - If Some(true), prevents payouts to contributors.
+    /// * `refund` - If Some(true), prevents depositors from reclaiming funds.
+    /// * `reason` - Optional UTF-8 string describing why the state was changed.
+    ///
+    /// # Errors
+    /// Returns `Error::NotInitialized` if the admin has not been set.
+    /// Returns `Error::Unauthorized` if the caller is not the registered admin.
     pub fn set_paused(
         env: Env,
         lock: Option<bool>,
@@ -1163,7 +1188,17 @@ impl BountyEscrowContract {
         Ok(())
     }
 
-    /// Emergency withdraw all funds (admin only, must have lock_paused = true)
+    /// Drains all reward tokens from the contract to a target address.
+    ///
+    /// This is an emergency recovery function and should only be used as a last resort.
+    /// The contract MUST have `lock_paused = true` before calling this.
+    ///
+    /// # Arguments
+    /// * `target` - The address that will receive the full contract balance.
+    ///
+    /// # Errors
+    /// Returns `Error::NotPaused` if `lock_paused` is false.
+    /// Returns `Error::Unauthorized` if the caller is not the admin.
     pub fn emergency_withdraw(env: Env, target: Address) -> Result<(), Error> {
         let admin: Address = env
             .storage()
@@ -2135,6 +2170,111 @@ impl BountyEscrowContract {
         Ok(())
     }
 
+    /// Simulate lock operation without state changes or token transfers.
+    ///
+    /// Returns a `SimulationResult` indicating whether the operation would succeed and the
+    /// resulting escrow state. Does not require authorization; safe for off-chain preview.
+    ///
+    /// # Arguments
+    /// * `depositor` - Address that would lock funds
+    /// * `bounty_id` - Bounty identifier
+    /// * `amount` - Amount to lock
+    /// * `deadline` - Deadline timestamp
+    ///
+    /// # Security
+    /// This function performs only read operations. No storage writes, token transfers,
+    /// or events are emitted.
+    pub fn dry_run_lock(
+        env: Env,
+        depositor: Address,
+        bounty_id: u64,
+        amount: i128,
+        deadline: u64,
+    ) -> SimulationResult {
+        fn err_result(e: Error) -> SimulationResult {
+            SimulationResult {
+                success: false,
+                error_code: e as u32,
+                amount: 0,
+                resulting_status: EscrowStatus::Locked,
+                remaining_amount: 0,
+            }
+        }
+        match Self::dry_run_lock_impl(&env, depositor, bounty_id, amount, deadline) {
+            Ok((net_amount,)) => SimulationResult {
+                success: true,
+                error_code: 0,
+                amount: net_amount,
+                resulting_status: EscrowStatus::Locked,
+                remaining_amount: net_amount,
+            },
+            Err(e) => err_result(e),
+        }
+    }
+
+    fn dry_run_lock_impl(
+        env: &Env,
+        depositor: Address,
+        bounty_id: u64,
+        amount: i128,
+        _deadline: u64,
+    ) -> Result<(i128,), Error> {
+        // 1. Contract must be initialized
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        // 2. Operational state: paused / deprecated
+        if Self::check_paused(env, symbol_short!("lock")) {
+            return Err(Error::FundsPaused);
+        }
+        if Self::get_deprecation_state(env).deprecated {
+            return Err(Error::ContractDeprecated);
+        }
+        // 3. Participant filtering (read-only)
+        Self::check_participant_filter(env, depositor.clone())?;
+        // 4. Amount policy
+        if let Some((min_amount, max_amount)) = env
+            .storage()
+            .instance()
+            .get::<DataKey, (i128, i128)>(&DataKey::AmountPolicy)
+        {
+            if amount < min_amount {
+                return Err(Error::AmountBelowMinimum);
+            }
+            if amount > max_amount {
+                return Err(Error::AmountAboveMaximum);
+            }
+        }
+        // 5. Bounty must not already exist
+        if env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            return Err(Error::BountyExists);
+        }
+        // 6. Amount validation
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let client = token::Client::new(env, &token_addr);
+        // 7. Sufficient balance (read-only)
+        let balance = client.balance(&depositor);
+        if balance < amount {
+            return Err(Error::InsufficientFunds);
+        }
+        // 8. Fee computation (pure)
+        let (lock_fee_rate, _release_fee_rate, _fee_recipient, fee_enabled) =
+            Self::resolve_fee_config(env);
+        let fee_amount = if fee_enabled && lock_fee_rate > 0 {
+            Self::calculate_fee(amount, lock_fee_rate)
+        } else {
+            0
+        };
+        let net_amount = amount.checked_sub(fee_amount).unwrap_or(amount);
+        if net_amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        Ok((net_amount,))
+    }
+
     /// Returns whether the given bounty escrow is marked as using non-transferable (soulbound)
     /// reward tokens. When true, the token is expected to disallow further transfers after claim.
     pub fn get_non_transferable_rewards(env: Env, bounty_id: u64) -> Result<bool, Error> {
@@ -2385,6 +2525,79 @@ impl BountyEscrowContract {
         env.storage().instance().remove(&DataKey::ReentrancyGuard);
 
         Ok(())
+    }
+
+    /// Simulate release operation without state changes or token transfers.
+    ///
+    /// Returns a `SimulationResult` indicating whether the operation would succeed and the
+    /// resulting escrow state. Does not require authorization; safe for off-chain preview.
+    ///
+    /// # Arguments
+    /// * `bounty_id` - Bounty identifier
+    /// * `contributor` - Recipient address
+    ///
+    /// # Security
+    /// This function performs only read operations. No storage writes, token transfers,
+    /// or events are emitted.
+    pub fn dry_run_release(env: Env, bounty_id: u64, contributor: Address) -> SimulationResult {
+        fn err_result(e: Error) -> SimulationResult {
+            SimulationResult {
+                success: false,
+                error_code: e as u32,
+                amount: 0,
+                resulting_status: EscrowStatus::Released,
+                remaining_amount: 0,
+            }
+        }
+        match Self::dry_run_release_impl(&env, bounty_id, contributor) {
+            Ok((amount,)) => SimulationResult {
+                success: true,
+                error_code: 0,
+                amount,
+                resulting_status: EscrowStatus::Released,
+                remaining_amount: 0,
+            },
+            Err(e) => err_result(e),
+        }
+    }
+
+    fn dry_run_release_impl(
+        env: &Env,
+        bounty_id: u64,
+        _contributor: Address,
+    ) -> Result<(i128,), Error> {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::NotInitialized);
+        }
+        if Self::check_paused(env, symbol_short!("release")) {
+            return Err(Error::FundsPaused);
+        }
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            return Err(Error::BountyNotFound);
+        }
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+        if escrow.status != EscrowStatus::Locked {
+            return Err(Error::FundsNotLocked);
+        }
+        let (_lock_fee_rate, release_fee_rate, _fee_recipient, fee_enabled) =
+            Self::resolve_fee_config(env);
+        let release_fee = if fee_enabled && release_fee_rate > 0 {
+            Self::calculate_fee(escrow.amount, release_fee_rate)
+        } else {
+            0
+        };
+        let net_payout = escrow
+            .amount
+            .checked_sub(release_fee)
+            .unwrap_or(escrow.amount);
+        if net_payout <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+        Ok((escrow.amount,))
     }
 
     /// Delegated release flow using a capability instead of admin auth.
@@ -2845,14 +3058,13 @@ impl BountyEscrowContract {
             .persistent()
             .set(&DataKey::Escrow(bounty_id), &escrow);
 
-        let timestamp = env.ledger().timestamp();
         events::emit_funds_released(
             &env,
             FundsReleased {
                 version: EVENT_VERSION_V2,
                 bounty_id,
                 amount: payout_amount,
-                recipient: contributor.clone(),
+                recipient: contributor,
                 timestamp: env.ledger().timestamp(),
             },
         );
@@ -2994,6 +3206,104 @@ impl BountyEscrowContract {
         // GUARD: release reentrancy lock
         reentrancy_guard::release(&env);
         Ok(())
+    }
+
+    /// Simulate refund operation without state changes or token transfers.
+    ///
+    /// Returns a `SimulationResult` indicating whether the operation would succeed and the
+    /// resulting escrow state. Does not require authorization; safe for off-chain preview.
+    ///
+    /// # Arguments
+    /// * `bounty_id` - Bounty identifier
+    ///
+    /// # Security
+    /// This function performs only read operations. No storage writes, token transfers,
+    /// or events are emitted.
+    pub fn dry_run_refund(env: Env, bounty_id: u64) -> SimulationResult {
+        fn err_result(e: Error, default_status: EscrowStatus) -> SimulationResult {
+            SimulationResult {
+                success: false,
+                error_code: e as u32,
+                amount: 0,
+                resulting_status: default_status,
+                remaining_amount: 0,
+            }
+        }
+        match Self::dry_run_refund_impl(&env, bounty_id) {
+            Ok((refund_amount, resulting_status, remaining_amount)) => SimulationResult {
+                success: true,
+                error_code: 0,
+                amount: refund_amount,
+                resulting_status,
+                remaining_amount,
+            },
+            Err(e) => err_result(e, EscrowStatus::Refunded),
+        }
+    }
+
+    fn dry_run_refund_impl(
+        env: &Env,
+        bounty_id: u64,
+    ) -> Result<(i128, EscrowStatus, i128), Error> {
+        if Self::check_paused(env, symbol_short!("refund")) {
+            return Err(Error::FundsPaused);
+        }
+        if !env.storage().persistent().has(&DataKey::Escrow(bounty_id)) {
+            return Err(Error::BountyNotFound);
+        }
+        let escrow: Escrow = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Escrow(bounty_id))
+            .unwrap();
+        if escrow.status != EscrowStatus::Locked
+            && escrow.status != EscrowStatus::PartiallyRefunded
+        {
+            return Err(Error::FundsNotLocked);
+        }
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::PendingClaim(bounty_id))
+        {
+            let claim: ClaimRecord = env
+                .storage()
+                .persistent()
+                .get(&DataKey::PendingClaim(bounty_id))
+                .unwrap();
+            if !claim.claimed {
+                return Err(Error::ClaimPending);
+            }
+        }
+        let now = env.ledger().timestamp();
+        let approval_key = DataKey::RefundApproval(bounty_id);
+        let approval: Option<RefundApproval> = env.storage().persistent().get(&approval_key);
+        if now < escrow.deadline && approval.is_none() {
+            return Err(Error::DeadlineNotPassed);
+        }
+        let (refund_amount, _refund_to, is_full) = if let Some(app) = approval {
+            let full = app.mode == RefundMode::Full || app.amount >= escrow.remaining_amount;
+            (app.amount, app.recipient, full)
+        } else {
+            (
+                escrow.remaining_amount,
+                escrow.depositor.clone(),
+                true,
+            )
+        };
+        if refund_amount <= 0 || refund_amount > escrow.remaining_amount {
+            return Err(Error::InvalidAmount);
+        }
+        let remaining_after = escrow
+            .remaining_amount
+            .checked_sub(refund_amount)
+            .unwrap_or(0);
+        let resulting_status = if is_full || remaining_after == 0 {
+            EscrowStatus::Refunded
+        } else {
+            EscrowStatus::PartiallyRefunded
+        };
+        Ok((refund_amount, resulting_status, remaining_after))
     }
 
     /// Sets or clears the anonymous resolver address.
@@ -5093,6 +5403,8 @@ mod escrow_status_transition_tests {
 #[cfg(test)]
 mod test_deadline_variants;
 #[cfg(test)]
+mod test_dry_run_simulation;
+#[cfg(test)]
 mod test_query_filters;
 #[cfg(test)]
 mod test_receipts;
@@ -5102,3 +5414,7 @@ mod test_sandbox;
 mod test_serialization_compatibility;
 #[cfg(test)]
 mod test_status_transitions;
+#[cfg(test)]
+mod test_e2e_upgrade_with_pause;
+#[cfg(test)]
+mod test_upgrade_scenarios;

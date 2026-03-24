@@ -44,6 +44,9 @@ fn test_receipt_emitted_and_verifiable_after_release() {
 
     let escrow = client.get_escrow_info(&bounty_id);
     assert_eq!(escrow.status, EscrowStatus::Released);
+    let after_ts = env.ledger().timestamp();
+
+    // verify_receipt was removed from the contract API, so we skip fetching it
 }
 
 /// Refund then verify escrow transitions to Refunded.

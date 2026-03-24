@@ -226,6 +226,10 @@ fn test_lock_funds_zero_amount_edge_case() {
     token_admin_client.mint(&depositor, &1_000);
 
     client.lock_funds(&depositor, &bounty_id, &amount, &deadline);
+
+    let escrow = client.get_escrow_info(&bounty_id);
+    assert_eq!(escrow.amount, 0);
+    assert_eq!(escrow.status, crate::EscrowStatus::Locked);
 }
 
 #[test]
