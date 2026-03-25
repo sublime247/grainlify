@@ -575,6 +575,8 @@ mod test_core_monitoring;
 mod test_performance_stats;
 #[cfg(test)]
 mod test_serialization_compatibility;
+#[cfg(test)]
+mod test_version_helpers;
 
 // ==================== END MONITORING MODULE ====================
 
@@ -1188,23 +1190,81 @@ impl GrainlifyContract {
         env.storage().instance().get(&DataKey::Version).unwrap_or(0)
     }
 
-    /// Returns the semantic version string (e.g., "1.0.0").
-    /// Falls back to mapping known numeric values to semantic strings.
+    /// Returns the semantic version string decoded from the stored numeric encoding.
+    ///
+    /// # Encoding policy
+    /// Versions stored as `major * 10_000 + minor * 100 + patch` are decoded
+    /// directly.  Legacy single-digit values (`1`, `2`, …) are treated as
+    /// `major.0.0` for backward compatibility.  A stored value of `0` returns
+    /// `"0.0.0"`.
+    ///
+    /// # Examples
+    /// | stored value | returned string |
+    /// |---|---|
+    /// | `0`      | `"0.0.0"` |
+    /// | `1`      | `"1.0.0"` (legacy) |
+    /// | `10000`  | `"1.0.0"` |
+    /// | `10100`  | `"1.1.0"` |
+    /// | `10001`  | `"1.0.1"` |
+    /// | `20305`  | `"2.3.5"` |
+    ///
+    /// # Security note
+    /// This is a pure view function; it performs no authorization and cannot
+    /// mutate state.
     pub fn get_version_semver_string(env: Env) -> String {
-        let raw: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(0);
-        let s = match raw {
-            0 => "0.0.0",
-            1 | 10000 => "1.0.0",
-            2 | 20000 => "2.0.0",
-            10100 => "1.1.0",
-            10001 => "1.0.1",
-            _ => "unknown",
+        let encoded = Self::get_version_numeric_encoded(env.clone());
+        let major = encoded / 10_000;
+        let minor = (encoded % 10_000) / 100;
+        let patch = encoded % 100;
+
+        // Build "major.minor.patch" without heap allocation beyond the SDK String.
+        // Maximum length: 3 digits each + 2 dots = 11 chars — well within limits.
+        let mut buf = [0u8; 12];
+        let mut pos = 0usize;
+
+        let write_u32 = |n: u32, buf: &mut [u8; 12], pos: &mut usize| {
+            if n >= 100 {
+                buf[*pos] = b'0' + (n / 100) as u8;
+                *pos += 1;
+            }
+            if n >= 10 {
+                buf[*pos] = b'0' + ((n % 100) / 10) as u8;
+                *pos += 1;
+            }
+            buf[*pos] = b'0' + (n % 10) as u8;
+            *pos += 1;
         };
+
+        write_u32(major, &mut buf, &mut pos);
+        buf[pos] = b'.';
+        pos += 1;
+        write_u32(minor, &mut buf, &mut pos);
+        buf[pos] = b'.';
+        pos += 1;
+        write_u32(patch, &mut buf, &mut pos);
+
+        // SAFETY: buf contains only ASCII digits and dots.
+        let s = core::str::from_utf8(&buf[..pos]).unwrap_or("0.0.0");
         String::from_str(&env, s)
     }
 
-    /// Returns the numeric encoded semantic version using policy major*10_000 + minor*100 + patch.
-    /// If the stored version is a simple major number (1,2,3...), it will be converted to major*10_000.
+    /// Returns the stored version normalised to the `major * 10_000 + minor * 100 + patch`
+    /// encoding used throughout this contract.
+    ///
+    /// Legacy single-digit values (`1`, `2`, …, `9_999`) are promoted to
+    /// `value * 10_000` so that comparisons with fully-encoded versions are
+    /// always correct.
+    ///
+    /// # Examples
+    /// ```text
+    /// stored 1     → 10_000   (1.0.0)
+    /// stored 2     → 20_000   (2.0.0)
+    /// stored 10100 → 10_100   (1.1.0)  — already encoded, returned as-is
+    /// stored 0     → 0        (0.0.0)
+    /// ```
+    ///
+    /// # Security note
+    /// Pure view function; no auth required, no state mutation.
     pub fn get_version_numeric_encoded(env: Env) -> u32 {
         let raw: u32 = env.storage().instance().get(&DataKey::Version).unwrap_or(0);
         if raw >= 10_000 {
@@ -1214,12 +1274,36 @@ impl GrainlifyContract {
         }
     }
 
-    /// Ensures the current version meets a minimum required encoded semantic version.
-    /// Panics if current version is lower than `min_numeric`.
+    /// Asserts that the contract's current version is at least `min_numeric`.
+    ///
+    /// `min_numeric` must use the `major * 10_000 + minor * 100 + patch`
+    /// encoding (e.g., `20000` for ≥ 2.0.0, `10100` for ≥ 1.1.0).
+    ///
+    /// # Errors
+    /// Panics with [`ContractError::NotInitialized`] (code `3`) when the
+    /// contract has not been initialised yet (version == 0).
+    ///
+    /// Panics with the string `"version_too_low"` when the current encoded
+    /// version is strictly less than `min_numeric`.  Integrators should catch
+    /// this panic string to detect version incompatibility.
+    ///
+    /// # Examples
+    /// ```text
+    /// // Contract at 2.0.0 (stored as 20000 or legacy 2)
+    /// require_min_version(20000)  → ok
+    /// require_min_version(10000)  → ok   (1.0.0 ≤ 2.0.0)
+    /// require_min_version(20001)  → panic("version_too_low")
+    /// ```
+    ///
+    /// # Security note
+    /// Pure view function; no auth required, no state mutation.
     pub fn require_min_version(env: Env, min_numeric: u32) {
         let cur = Self::get_version_numeric_encoded(env.clone());
+        if cur == 0 {
+            panic!("{}", ContractError::NotInitialized as u32);
+        }
         if cur < min_numeric {
-            panic!("Incompatible contract version");
+            panic!("version_too_low");
         }
     }
 
